@@ -5,6 +5,7 @@ import { use, useEffect, useRef, useState } from "react";
 
 import { useRouter } from "next/navigation";
 import { speak } from "@/lib/tts";
+import { getHandset } from "@/lib/handset";
 import { signsToSpeech, comprehendSpeech, type Comprehension } from "@/lib/ai";
 import { SIGN_BY_ID } from "@/data/signs";
 
@@ -299,7 +300,6 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
 
   const [phase, setPhase]     = useState<Phase>("ringing");
   const [seconds, setSeconds] = useState(0);
-  const [muted, setMuted]     = useState(false);
   const [dots, setDots]       = useState(1);
 
   // ── Phase 1: sign → emotional speech ──────────────────────────────────────
@@ -334,6 +334,7 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
       setSpoken(r.phrase);
       setRecent((prev) => [r.phrase, ...prev].slice(0, 4));
       speak(r.phrase, { tone: r.tone });
+      if (handsetStartedRef.current) { try { getHandset().speak(r.phrase); } catch {} } // also play on iPhone speaker
     } finally {
       isSpeakingRef.current = false;
     }
@@ -366,6 +367,8 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
   const [cueIndex, setCueIndex]       = useState(0);
   const [matched, setMatched]         = useState<string[]>([]); // signs satisfied this turn
   const [talkGate, setTalkGate]       = useState(false);        // caller line matched (Live)
+  const [handsetOn, setHandsetOn]     = useState(false);        // iPhone handset paired
+  const [handsetStarted, setHandsetStarted] = useState(false);  // handset link started (button pressed)
   const [scriptComplete, setScriptComplete] = useState(false);
   const [listening, setListening]     = useState(false);
   const [transcript, setTranscript]   = useState("");
@@ -473,6 +476,38 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) setSttSupported(false);
   }, []);
+
+  // iPhone handset bridge: this page is the "mac" side. Connected ON DEMAND from
+  // the Start Call button (not silently on mount). The phone's mic → transcripts
+  // run through the SAME comprehension path as the Simulate-caller box; our
+  // outbound sentences are also spoken on the iPhone speaker. Safe no-op when the
+  // bridge isn't running (the page works exactly as before).
+  const handsetStartedRef = useRef(false);
+  handsetStartedRef.current = handsetStarted;
+
+  function startHandset() {
+    if (handsetStartedRef.current) return;
+    try {
+      const h = getHandset();
+      h.connect("mac");
+      h.onTranscript((text: string) => { runComprehension(text); }); // same handler as the test box
+      h.onPeer((role: string, connected: boolean) => { if (role === "phone") setHandsetOn(connected); });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      h.onStatus?.((st: any) => { if (typeof st?.connected === "boolean") setHandsetOn(st.connected); });
+      handsetStartedRef.current = true;
+      setHandsetStarted(true);
+    } catch { /* bridge offline → page still fully usable */ }
+  }
+  function stopHandset() {
+    try { getHandset().close(); } catch {}
+    handsetStartedRef.current = false;
+    setHandsetStarted(false);
+    setHandsetOn(false);
+  }
+  function toggleHandset() { if (handsetStartedRef.current) stopHandset(); else startHandset(); }
+
+  // Close the handset link on unmount if it was started.
+  useEffect(() => () => { try { if (handsetStartedRef.current) getHandset().close(); } catch {} }, []);
 
   // Run a transcript through the comprehension pipeline (shared by mic + test box).
   async function runComprehension(text: string) {
@@ -655,6 +690,13 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
   const displayGloss   = liveMode ? (comp?.gloss ?? [])   : (scriptedTurn?.gloss   ?? []);
   const displayTone    = liveMode ? toneChip(comp?.tone)  : toneChip(scriptedTurn?.tone);
 
+  // ── Handset (iPhone) Start Call button presentation ──────────────────────────
+  // idle → "Start Call" (green); started but unpaired → "Waiting for iPhone…";
+  // paired → solid green "On Call". Pressing again ends the link.
+  const handsetLabel = !handsetStarted ? "Start Call" : handsetOn ? "On Call" : "Waiting for iPhone…";
+  const handsetBg = handsetOn ? T.green : handsetStarted ? "rgba(52,199,89,0.30)" : "rgba(52,199,89,0.16)";
+  const handsetFg = handsetOn ? "#FFFFFF" : T.green;
+
   // ── Floating control bar (shared) ────────────────────────────────────────────
   const RingingControls = (
     <div className="flex-shrink-0 flex justify-center pb-10 pt-4">
@@ -663,9 +705,9 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
         style={{ ...VIBRANCY, borderRadius: 28 }}
       >
         {[
-          { label: muted ? "Unmute" : "Mute", icon: muted ? <MicOff size={20} /> : <Mic size={20} />, bg: "rgba(0,0,0,0.10)", fg: T.label, onClick: () => setMuted((m) => !m) },
+          { label: handsetLabel, icon: <Phone size={24} />, bg: handsetBg, fg: handsetFg, size: "lg" as const, onClick: toggleHandset },
           { label: "End Call", icon: <PhoneOff size={24} />, bg: T.red, fg: "#FFF", size: "lg" as const, onClick: handleCancelCall },
-          { label: "Camera", icon: <Video size={20} />, bg: "rgba(0,0,0,0.10)", fg: T.label },
+          { label: "Camera", icon: <Video size={24} />, bg: "rgba(0,0,0,0.10)", fg: T.label, size: "lg" as const },
         ].map(({ label, icon, bg, fg, size, onClick }) => (
           <div key={label} className="flex flex-col items-center gap-2">
             <CtrlBtn label={label} bg={bg} fg={fg} size={size} onClick={onClick}>
@@ -686,33 +728,27 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
         className="flex items-center gap-4 px-7 py-3.5"
         style={{ ...VIBRANCY, borderRadius: 28 }}
       >
-        {liveMode ? (
+        {/* Live mode keeps the MacBook-mic "Listen to caller" control as-is */}
+        {liveMode && (
           <CtrlBtn
             label={listening ? "Stop listening" : "Listen to caller"}
             bg={listening ? T.green : "rgba(0,0,0,0.08)"}
             fg={listening ? "#FFF" : T.label}
+            size="lg"
             onClick={toggleListening}
           >
-            {listening ? <Mic size={18} /> : <MicOff size={18} />}
-          </CtrlBtn>
-        ) : (
-          <CtrlBtn
-            label={muted ? "Unmute" : "Mute"}
-            bg="rgba(0,0,0,0.08)"
-            fg={T.label}
-            onClick={() => setMuted((m) => !m)}
-          >
-            {muted ? <MicOff size={18} /> : <Mic size={18} />}
+            {listening ? <Mic size={24} /> : <MicOff size={24} />}
           </CtrlBtn>
         )}
-        <CtrlBtn label="Active Call" bg={T.green} fg="#FFF" size="lg">
-          <Phone size={22} />
+        {/* iPhone handset Start Call button (replaces the old Mute button) */}
+        <CtrlBtn label={handsetLabel} bg={handsetBg} fg={handsetFg} size="lg" onClick={toggleHandset}>
+          <Phone size={24} />
         </CtrlBtn>
         <CtrlBtn label="End Call" bg={T.red} fg="#FFF" size="lg" onClick={handleEndCall}>
-          <PhoneOff size={22} />
+          <PhoneOff size={24} />
         </CtrlBtn>
-        <CtrlBtn label="Camera" bg="rgba(0,0,0,0.08)" fg={T.label}>
-          <Video size={18} />
+        <CtrlBtn label="Camera" bg="rgba(0,0,0,0.08)" fg={T.label} size="lg">
+          <Video size={24} />
         </CtrlBtn>
       </div>
     </div>
@@ -841,6 +877,19 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                   style={{ color: T.label }}
                 >
                   {fmt(seconds)}
+                </span>
+                <span className="text-[13px]" style={{ color: T.tertLabel }}>·</span>
+                <span
+                  className="text-[13px] font-semibold"
+                  style={{ color: handsetOn ? T.green : handsetStarted ? T.orange : listening ? T.green : T.tertLabel }}
+                >
+                  {handsetOn
+                    ? "📱 Phone connected"
+                    : handsetStarted
+                    ? "📱 Waiting for phone…"
+                    : listening
+                    ? "🎙️ MacBook mic on"
+                    : "Not connected"}
                 </span>
               </div>
             </div>
@@ -1008,7 +1057,7 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                         key={phrase}
                         whileHover={{ filter: "brightness(0.94)" }}
                         whileTap={{ scale: 0.96 }}
-                        onClick={() => { setSpoken(phrase); setRecent((r) => [phrase, ...r].slice(0, 4)); speak(phrase, { tone: "friendly" }); }}
+                        onClick={() => { setSpoken(phrase); setRecent((r) => [phrase, ...r].slice(0, 4)); speak(phrase, { tone: "friendly" }); if (handsetStartedRef.current) { try { getHandset().speak(phrase); } catch {} } }}
                         aria-label={`Say: ${phrase}`}
                         className="px-3 py-[5px] rounded-[8px] text-[13px] font-medium
                           focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
