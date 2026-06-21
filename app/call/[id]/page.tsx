@@ -1244,9 +1244,9 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                         side-by-side; wraps to stacked when the panel is narrow. The
                         text always renders as the fallback / source of truth. */}
                     <div className="flex flex-wrap items-start gap-3">
-                      {/* LEFT — bounded idle 3D avatar (prominent; never overflows) */}
+                      {/* LEFT — 3D avatar; signs the comprehension gloss, else idles */}
                       <div className="flex-shrink-0" style={{ flex: "0 0 340px", maxWidth: "100%" }}>
-                        <SigningAvatar />
+                        <SigningAvatar gloss={displayGloss} />
                       </div>
 
                       {/* RIGHT — meaning / tone / key info / gloss (compact, no-scroll) */}
