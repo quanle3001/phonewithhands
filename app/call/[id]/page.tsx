@@ -333,8 +333,8 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
       const r = await signsToSpeech(buffer.map((x) => x.id));
       setSpoken(r.phrase);
       setRecent((prev) => [r.phrase, ...prev].slice(0, 4));
-      speak(r.phrase, { tone: r.tone });
-      if (handsetStartedRef.current) { try { getHandset().speak(r.phrase); } catch {} } // also play on iPhone speaker
+      if (handsetStartedRef.current) { try { getHandset().speak(r.phrase); } catch {} } // iPhone speaker
+      else speak(r.phrase, { tone: r.tone }); // Mac speaker only when no handset
     } finally {
       isSpeakingRef.current = false;
     }
@@ -1057,7 +1057,7 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                         key={phrase}
                         whileHover={{ filter: "brightness(0.94)" }}
                         whileTap={{ scale: 0.96 }}
-                        onClick={() => { setSpoken(phrase); setRecent((r) => [phrase, ...r].slice(0, 4)); speak(phrase, { tone: "friendly" }); if (handsetStartedRef.current) { try { getHandset().speak(phrase); } catch {} } }}
+                        onClick={() => { setSpoken(phrase); setRecent((r) => [phrase, ...r].slice(0, 4)); if (handsetStartedRef.current) { try { getHandset().speak(phrase); } catch {} } else speak(phrase, { tone: "friendly" }); }}
                         aria-label={`Say: ${phrase}`}
                         className="px-3 py-[5px] rounded-[8px] text-[13px] font-medium
                           focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
