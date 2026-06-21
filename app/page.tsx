@@ -1,60 +1,361 @@
-import Link from "next/link";
+"use client";
 
-export default function Home() {
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { Search, Video } from "lucide-react";
+import { CONTACTS, type Contact } from "@/data/contacts";
+import { getRecents, type RecentCall } from "@/lib/recents";
+
+// ── Apple light-mode tokens ────────────────────────────────────────────────────
+const T = {
+  bg:          "#F5F5F7",
+  surface:     "#FFFFFF",
+  label:       "#1D1D1F",
+  secondLabel: "rgba(60,60,67,0.60)",
+  tertLabel:   "rgba(60,60,67,0.30)",
+  separator:   "rgba(60,60,67,0.12)",
+  blue:        "#007AFF",
+  green:       "#34C759",
+  red:         "#FF3B30",
+} as const;
+
+const SPRING = { type: "spring" as const, stiffness: 260, damping: 30, mass: 0.9 };
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function fmtTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function fmtDuration(s: number): string {
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+function AvatarCircle({ contact }: { contact: Contact }) {
+  const isEmoji = (contact.avatar.codePointAt(0) ?? 0) > 127;
   return (
-    <main className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-8">
-      <div className="max-w-2xl w-full text-center space-y-8">
-        {/* Logo */}
-        <div className="flex flex-col items-center gap-4">
-          <span className="text-7xl select-none" aria-hidden>🤟</span>
-          <div>
-            <h1 className="text-4xl font-bold tracking-tight text-white">
-              Phone With Hand
-            </h1>
-            <p className="mt-1 text-sm font-semibold tracking-widest text-indigo-400 uppercase">
-              Berkeley AI Hackathon 2026
-            </p>
-          </div>
+    <div
+      className="rounded-full flex items-center justify-center flex-shrink-0 select-none"
+      style={{
+        width:      44,
+        height:     44,
+        background: isEmoji ? "rgba(0,0,0,0.06)" : contact.color + "22",
+        border:     `1.5px solid ${contact.color}33`,
+      }}
+      aria-hidden
+    >
+      {isEmoji ? (
+        <span style={{ fontSize: 20, lineHeight: 1 }}>{contact.avatar}</span>
+      ) : (
+        <span style={{ fontSize: 14, fontWeight: 700, color: contact.color }}>
+          {contact.avatar}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Contact row ────────────────────────────────────────────────────────────────
+
+interface RowProps {
+  contact: Contact;
+  index: number;
+  isLast: boolean;
+  onCall: (c: Contact) => void;
+  rm: boolean;
+}
+
+function ContactRow({ contact, index, isLast, onCall, rm }: RowProps) {
+  return (
+    <>
+      <motion.div
+        initial={{ opacity: 0, y: rm ? 0 : 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ ...SPRING, delay: index * 0.04 }}
+        role="button"
+        tabIndex={0}
+        onClick={() => onCall(contact)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onCall(contact); }}
+        whileHover={{ backgroundColor: "rgba(0,0,0,0.028)" }}
+        whileTap={{ scale: 0.99 }}
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-inset
+          focus-visible:ring-[#007AFF] transition-colors"
+      >
+        <AvatarCircle contact={contact} />
+
+        <div className="flex-1 min-w-0">
+          <p
+            className="truncate"
+            style={{ fontSize: 17, fontWeight: 500, color: T.label, lineHeight: "1.3" }}
+          >
+            {contact.name}
+          </p>
+          <p
+            className="truncate"
+            style={{ fontSize: 15, color: T.secondLabel, lineHeight: "1.3" }}
+          >
+            {contact.subtitle}
+          </p>
         </div>
 
-        {/* Pitch */}
-        <p className="text-lg text-gray-300 leading-relaxed max-w-lg mx-auto">
-          An accessibility bridge that helps Deaf&nbsp;/&nbsp;ASL users make
-          phone calls independently — live hand detection, real-time ASL
-          interpretation, no relay service needed.
-        </p>
+        <motion.button
+          whileHover={{ scale: 1.09 }}
+          whileTap={{ scale: 0.88 }}
+          onClick={(e) => { e.stopPropagation(); onCall(contact); }}
+          aria-label={`Video call ${contact.name}`}
+          className="flex items-center justify-center flex-shrink-0 rounded-full
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+          style={{
+            width:      34,
+            height:     34,
+            background: contact.callable ? `${T.green}1a` : "rgba(0,0,0,0.05)",
+            border:     `1px solid ${contact.callable ? T.green + "44" : "rgba(0,0,0,0.09)"}`,
+          }}
+        >
+          <Video
+            size={14}
+            style={{ color: contact.callable ? T.green : T.tertLabel }}
+          />
+        </motion.button>
+      </motion.div>
 
-        {/* Feature pills */}
-        <div className="flex flex-wrap gap-2 justify-center">
-          {[
-            "🖐 MediaPipe Hand Tracking",
-            "🧠 LLM Interpretation (soon)",
-            "🗣️ TTS Voice Output (soon)",
-            "🤖 Sign Avatar (soon)",
-          ].map((f) => (
-            <span
-              key={f}
-              className="px-3 py-1.5 rounded-full bg-gray-800 text-gray-300 text-sm"
+      {/* iOS-style inset separator — hidden after last row */}
+      {!isLast && (
+        <div style={{ height: 1, background: T.separator, marginLeft: 60 }} />
+      )}
+    </>
+  );
+}
+
+// ── Recent row ─────────────────────────────────────────────────────────────────
+
+function RecentRow({ recent, isLast }: { recent: RecentCall; isLast: boolean }) {
+  const completed = recent.outcome === "completed";
+  return (
+    <>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div
+          className="rounded-full flex items-center justify-center flex-shrink-0"
+          style={{ width: 44, height: 44, background: "rgba(0,0,0,0.05)", fontSize: 20 }}
+          aria-hidden
+        >
+          {completed ? "📞" : "📵"}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p
+            className="truncate"
+            style={{ fontSize: 17, fontWeight: 500, color: T.label }}
+          >
+            {recent.contactName}
+          </p>
+          <p style={{ fontSize: 15, color: completed ? T.green : T.red }}>
+            {completed ? "Connected" : "Cancelled"}
+            {recent.duration > 0 && ` · ${fmtDuration(recent.duration)}`}
+          </p>
+        </div>
+        <p style={{ fontSize: 13, color: T.tertLabel, flexShrink: 0 }}>
+          {fmtTime(recent.timestamp)}
+        </p>
+      </div>
+      {!isLast && (
+        <div style={{ height: 1, background: T.separator, marginLeft: 60 }} />
+      )}
+    </>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────────
+
+export default function HomePage() {
+  const router    = useRouter();
+  const rm        = useReducedMotion();
+  const [tab, setTab]       = useState<"contacts" | "recents">("contacts");
+  const [query, setQuery]   = useState("");
+  const [toast, setToast]   = useState<string | null>(null);
+  const [recents, setRecents] = useState<RecentCall[]>([]);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { setRecents(getRecents()); }, []);
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+  const filtered = CONTACTS.filter(
+    (c) =>
+      c.name.toLowerCase().includes(query.toLowerCase()) ||
+      c.subtitle.toLowerCase().includes(query.toLowerCase())
+  );
+
+  function handleCall(contact: Contact) {
+    if (!contact.callable) {
+      setToast("Demo: only Dr. Smith's Office is connected.");
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 3200);
+      return;
+    }
+    router.push(`/call/${contact.id}`);
+  }
+
+  return (
+    <div
+      className="min-h-screen overflow-x-hidden relative"
+      style={{ background: T.bg }}
+    >
+      {/* ── Centered column ──────────────────────────────────────────────── */}
+      <div className="max-w-[540px] mx-auto px-5 pb-16">
+
+        {/* Large inline title — iOS Contacts style */}
+        <h1
+          className="select-none"
+          style={{
+            fontSize:      34,
+            fontWeight:    700,
+            letterSpacing: "-0.02em",
+            color:         T.label,
+            paddingTop:    56,
+            marginBottom:  12,
+          }}
+        >
+          Contacts
+        </h1>
+
+        {/* iOS-style search field */}
+        <div
+          className="flex items-center gap-2 rounded-[10px] px-3 py-[8px] mb-3"
+          style={{ background: "rgba(116,116,128,0.12)" }}
+        >
+          <Search size={15} style={{ color: T.secondLabel, flexShrink: 0 }} />
+          <input
+            type="text"
+            placeholder="Search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="flex-1 bg-transparent text-[15px] outline-none placeholder:opacity-50"
+            style={{ color: T.label }}
+            aria-label="Search contacts"
+          />
+        </div>
+
+        {/* Segmented control */}
+        <div
+          className="flex rounded-[10px] p-[3px] gap-[3px] mb-5"
+          style={{ background: "rgba(116,116,128,0.12)" }}
+        >
+          {(["contacts", "recents"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className="flex-1 py-[6px] rounded-[8px] text-[13px] font-semibold capitalize
+                transition-all focus:outline-none focus-visible:ring-2
+                focus-visible:ring-[#007AFF]"
+              style={{
+                background: tab === t ? "#FFFFFF" : "transparent",
+                color:      tab === t ? T.label : T.secondLabel,
+                boxShadow:  tab === t ? "0 1px 4px rgba(0,0,0,0.12)" : "none",
+              }}
             >
-              {f}
-            </span>
+              {t === "contacts" ? "Contacts" : "Recents"}
+            </button>
           ))}
         </div>
 
-        {/* CTA */}
-        <Link
-          href="/demo"
-          className="inline-flex items-center gap-2 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 active:scale-95 rounded-2xl font-semibold text-lg text-white transition-all shadow-lg shadow-indigo-900/40"
-        >
-          Start Demo
-          <span aria-hidden>→</span>
-        </Link>
-
-        <p className="text-xs text-gray-600">
-          Chrome recommended &nbsp;·&nbsp; Camera permission required &nbsp;·&nbsp;
-          No data leaves your device
-        </p>
+        {/* List area */}
+        <AnimatePresence mode="wait">
+          {tab === "contacts" ? (
+            <motion.div
+              key="contacts"
+              initial={{ opacity: 0, y: rm ? 0 : 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              {filtered.length === 0 ? (
+                <p
+                  className="text-center py-14 text-[15px]"
+                  style={{ color: T.tertLabel }}
+                >
+                  No contacts found
+                </p>
+              ) : (
+                <div
+                  style={{
+                    background:   T.surface,
+                    borderRadius: 18,
+                    overflow:     "hidden",
+                    boxShadow:    "0 4px 24px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  {filtered.map((c, i) => (
+                    <ContactRow
+                      key={c.id}
+                      contact={c}
+                      index={i}
+                      isLast={i === filtered.length - 1}
+                      onCall={handleCall}
+                      rm={!!rm}
+                    />
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="recents"
+              initial={{ opacity: 0, y: rm ? 0 : 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+            >
+              {recents.length === 0 ? (
+                <div className="flex flex-col items-center gap-3 py-14">
+                  <span className="text-[32px]" aria-hidden>🕐</span>
+                  <p className="text-[15px]" style={{ color: T.tertLabel }}>
+                    No recent calls
+                  </p>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    background:   T.surface,
+                    borderRadius: 18,
+                    overflow:     "hidden",
+                    boxShadow:    "0 4px 24px rgba(0,0,0,0.06)",
+                  }}
+                >
+                  {recents.map((r, i) => (
+                    <RecentRow key={i} recent={r} isLast={i === recents.length - 1} />
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
-    </main>
+
+      {/* ── Toast — slides down from top (iOS notification style) ─────────── */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: rm ? 0 : -24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: rm ? 0 : -12 }}
+            transition={SPRING}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-full
+              px-5 py-2.5 text-[14px] font-medium pointer-events-none"
+            style={{
+              background:           "rgba(28,28,30,0.86)",
+              backdropFilter:       "blur(20px)",
+              WebkitBackdropFilter: "blur(20px)",
+              color:                "#FFFFFF",
+              whiteSpace:           "nowrap",
+              boxShadow:            "0 4px 24px rgba(0,0,0,0.25)",
+            }}
+          >
+            {toast}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

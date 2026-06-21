@@ -2,21 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── macOS dark-mode system color tokens ─────────────────────────────────── */
+/* ── Apple light-mode system tokens ─────────────────────────────────────────── */
 :root {
-  --label:            rgba(255, 255, 255, 0.85);
-  --secondary-label:  rgba(255, 255, 255, 0.55);
-  --tertiary-label:   rgba(255, 255, 255, 0.25);
-  --quaternary-label: rgba(255, 255, 255, 0.10);
-  --separator:        rgba(255, 255, 255, 0.10);
+  --bg:               #F5F5F7;
+  --surface:          #FFFFFF;
+  --label:            #1D1D1F;
+  --secondary-label:  rgba(60, 60, 67, 0.60);
+  --tertiary-label:   rgba(60, 60, 67, 0.30);
+  --quaternary-label: rgba(60, 60, 67, 0.18);
+  --separator:        rgba(60, 60, 67, 0.12);
 
-  --sys-blue:   #0A84FF;
-  --sys-green:  #30D158;
-  --sys-red:    #FF453A;
-  --sys-orange: #FF9F0A;
-  --sys-yellow: #FFD60A;
-  --sys-purple: #BF5AF2;
-  --sys-teal:   #40C8E0;
+  --sys-blue:   #007AFF;
+  --sys-green:  #34C759;
+  --sys-red:    #FF3B30;
+  --sys-orange: #FF9500;
+  --sys-yellow: #FFCC00;
+  --sys-purple: #AF52DE;
+  --sys-teal:   #32ADE6;
 
   --sf: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
         "Helvetica Neue", system-ui, sans-serif;
@@ -29,10 +31,7 @@
     -moz-osx-font-smoothing: grayscale;
   }
   body {
-    @apply bg-gray-950 text-white;
-  }
-  /* Prevent overscroll on demo page */
-  .demo-root {
-    overscroll-behavior: none;
+    background: var(--bg);
+    color: var(--label);
   }
 }

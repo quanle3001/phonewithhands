@@ -166,19 +166,23 @@ export default function CameraSignDetector() {
     error: "Initialization error",
   };
 
-  // macOS dark-mode system colors (local — avoids cross-file coupling)
-  const L  = "rgba(255,255,255,0.85)";
-  const SL = "rgba(255,255,255,0.55)";
-  const TL = "rgba(255,255,255,0.25)";
-  const BLUE  = "#0A84FF";
-  const GREEN = "#30D158";
-  const RED   = "#FF453A";
+  // Light-mode tokens for the stats panel (on white card)
+  const L   = "#1D1D1F";
+  const SL  = "rgba(60,60,67,0.60)";
+  const TL  = "rgba(60,60,67,0.30)";
+  // Camera overlay colours — always on dark video bg, so stay white
+  const OSL = "rgba(255,255,255,0.70)";
+  const OTL = "rgba(255,255,255,0.40)";
+  // System colours (light-mode)
+  const BLUE  = "#007AFF";
+  const GREEN = "#34C759";
+  const RED   = "#FF3B30";
 
   return (
     <div className="flex flex-col gap-2.5 w-full h-full">
 
       {/* ── Video + canvas overlay ── */}
-      <div className="relative bg-black/50 rounded-[10px] overflow-hidden w-full aspect-video">
+      <div className="relative bg-black/70 rounded-[10px] overflow-hidden w-full aspect-video">
         {/* Mirror video so it feels like a mirror */}
         <video
           ref={videoRef}
@@ -193,11 +197,11 @@ export default function CameraSignDetector() {
           className="absolute inset-0 w-full h-full [transform:scaleX(-1)]"
         />
 
-        {/* Overlay states */}
+        {/* Overlay states — text stays white (dark camera bg) */}
         {status !== "ready" && (
           <div
             className="absolute inset-0 flex items-center justify-center rounded-[10px] p-4"
-            style={{ background: "rgba(0,0,0,0.62)", backdropFilter: "blur(6px)" }}
+            style={{ background: "rgba(0,0,0,0.64)", backdropFilter: "blur(6px)" }}
           >
             {(status === "loading-camera" || status === "loading-model") && (
               <div className="flex flex-col items-center gap-2.5 text-center">
@@ -205,7 +209,7 @@ export default function CameraSignDetector() {
                   className="w-7 h-7 border-[2.5px] border-t-transparent rounded-full animate-spin"
                   style={{ borderColor: `${BLUE} ${BLUE} ${BLUE} transparent` }}
                 />
-                <p className="text-[13px]" style={{ color: SL }}>
+                <p className="text-[13px]" style={{ color: OSL }}>
                   {statusLabel[status]}
                 </p>
               </div>
@@ -217,7 +221,7 @@ export default function CameraSignDetector() {
                 <p className="text-[13px] font-semibold" style={{ color: RED }}>
                   Camera access denied
                 </p>
-                <p className="text-[11px] leading-relaxed" style={{ color: SL }}>
+                <p className="text-[11px] leading-relaxed" style={{ color: OSL }}>
                   Click the camera icon in Chrome&apos;s address bar → Allow →
                   then refresh.
                 </p>
@@ -233,12 +237,12 @@ export default function CameraSignDetector() {
                 {error && (
                   <p
                     className="text-[11px] font-mono rounded-[6px] px-2 py-1"
-                    style={{ background: "rgba(255,255,255,0.08)", color: SL }}
+                    style={{ background: "rgba(255,255,255,0.10)", color: OSL }}
                   >
                     {error}
                   </p>
                 )}
-                <p className="text-[11px]" style={{ color: TL }}>
+                <p className="text-[11px]" style={{ color: OTL }}>
                   Check the browser console.
                 </p>
               </div>
@@ -248,20 +252,20 @@ export default function CameraSignDetector() {
               <div className="flex flex-col items-center gap-2">
                 <div
                   className="w-6 h-6 border-2 border-t-transparent rounded-full animate-spin"
-                  style={{ borderColor: `${TL} ${TL} ${TL} transparent` }}
+                  style={{ borderColor: `${OTL} ${OTL} ${OTL} transparent` }}
                 />
-                <p className="text-[11px]" style={{ color: TL }}>Starting…</p>
+                <p className="text-[11px]" style={{ color: OTL }}>Starting…</p>
               </div>
             )}
           </div>
         )}
 
-        {/* Live badge — macOS system red */}
+        {/* Live badge — dark pill on dark camera feed */}
         {status === "ready" && (
           <div
             className="absolute top-2 left-2 flex items-center gap-1.5 rounded-full
               px-2.5 py-[3px] text-[11px] font-semibold text-white"
-            style={{ background: "rgba(0,0,0,0.58)", backdropFilter: "blur(6px)" }}
+            style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)" }}
           >
             <span
               className="w-[6px] h-[6px] rounded-full animate-pulse"
@@ -272,15 +276,14 @@ export default function CameraSignDetector() {
         )}
       </div>
 
-      {/* ── Detection readout — macOS material card ── */}
+      {/* ── Detection readout — light surface card ── */}
       <div
         className="rounded-[10px] p-3.5 space-y-2.5 transition-opacity"
         style={{
-          background:     "rgba(255,255,255,0.05)",
-          backdropFilter: "blur(20px)",
-          border:         "1px solid rgba(255,255,255,0.10)",
-          boxShadow:      "inset 0 1px 0 rgba(255,255,255,0.05)",
-          opacity:        status === "ready" ? 1 : 0.35,
+          background: "#FFFFFF",
+          border:     "1px solid rgba(60,60,67,0.12)",
+          boxShadow:  "0 2px 8px rgba(0,0,0,0.06)",
+          opacity:    status === "ready" ? 1 : 0.45,
         }}
       >
         {/* Hands detected */}
@@ -303,7 +306,7 @@ export default function CameraSignDetector() {
           </span>
         </div>
 
-        {/* Confidence — macOS system-blue progress bar */}
+        {/* Confidence — systemBlue progress bar */}
         <div className="space-y-1">
           <div className="flex items-center justify-between">
             <span className="text-[11px]" style={{ color: TL }}>Confidence</span>
@@ -313,7 +316,7 @@ export default function CameraSignDetector() {
           </div>
           <div
             className="w-full h-[4px] rounded-full overflow-hidden"
-            style={{ background: "rgba(255,255,255,0.10)" }}
+            style={{ background: "rgba(60,60,67,0.10)" }}
           >
             <div
               className="h-full rounded-full transition-all duration-200"
