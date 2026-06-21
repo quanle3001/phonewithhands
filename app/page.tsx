@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { Search, Video } from "lucide-react";
+import { Search, Video, Hand } from "lucide-react";
 import { CONTACTS, type Contact } from "@/data/contacts";
 import { getRecents, type RecentCall } from "@/lib/recents";
 
@@ -206,19 +207,23 @@ export default function HomePage() {
       <div className="max-w-[540px] mx-auto px-5 pb-16">
 
         {/* Large inline title — iOS Contacts style */}
-        <h1
-          className="select-none"
-          style={{
-            fontSize:      34,
-            fontWeight:    700,
-            letterSpacing: "-0.02em",
-            color:         T.label,
-            paddingTop:    56,
-            marginBottom:  12,
-          }}
-        >
-          Contacts
-        </h1>
+        <div className="flex items-end justify-between" style={{ paddingTop: 56, marginBottom: 12 }}>
+          <h1
+            className="select-none"
+            style={{ fontSize: 34, fontWeight: 700, letterSpacing: "-0.02em", color: T.label }}
+          >
+            Contacts
+          </h1>
+          <Link
+            href="/train"
+            className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-semibold
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+            style={{ background: "rgba(0,122,255,0.10)", color: T.blue }}
+          >
+            <Hand size={15} />
+            Train signs
+          </Link>
+        </div>
 
         {/* iOS-style search field */}
         <div

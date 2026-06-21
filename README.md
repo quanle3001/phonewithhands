@@ -41,8 +41,51 @@ That's it — no API keys, no backend, everything runs in the browser.
 
 | URL | Description |
 |---|---|
-| `http://localhost:3000` | Home page — project pitch |
-| `http://localhost:3000/demo` | 3-column demo shell with live hand detection |
+| `http://localhost:3000` | Home page — contacts + **Train signs** button |
+| `http://localhost:3000/train` | **Sign trainer** — teach the app custom ASL handshapes |
+| `http://localhost:3000/call/dr-smith` | Scripted demo call |
+| `http://localhost:3000/call/testing-call` | Testing Call — sign playground (pretrained gestures work out of the box) |
+| `http://localhost:3000/demo` | Redirects to the wired call route |
+
+---
+
+## Training your own signs (`/train`)
+
+The trainer is **browser-only** — your webcam frames and the trained model never
+leave the device.
+
+1. Open `http://localhost:3000/train` and allow camera access.
+2. Pick a trainable sign from the **Vocabulary** list (right). The 7 *pretrained*
+   gestures are marked and need **no training** — MediaPipe recognises them
+   directly.
+3. Make the handshape and **hold the Record button** (or press **Space**) to grab
+   ~30 frames. Vary angle/distance slightly for robustness. The per-label sample
+   count updates live.
+4. Watch **Live prediction** — it shows what the current model thinks your hand is
+   and turns green when it matches the selected sign.
+5. Use **Clear** (trash icon / "Clear …" button) to redo a label, or **Clear all**
+   to start over.
+6. **Export** downloads the model as JSON; **Import** loads one back. Trained signs
+   immediately drive sign→speech in the call screens.
+
+### Where the model is stored
+
+- **localStorage** key `pwh.signModel.v1` (survives refreshes/restarts).
+- **Export to file** for backup or sharing between machines (`Import` to restore).
+
+### How recognition works (classifier-agnostic)
+
+`components/HandTracker.tsx` owns the camera + MediaPipe Hands pipeline and emits,
+per frame, the 21 hand landmarks **and** MediaPipe's pretrained gesture. Landmarks
+are normalized to be translation- and scale-invariant (`lib/landmarks.ts`:
+wrist-centered, scaled by hand size) before classification.
+
+All recognition goes through the **`SignClassifier`** interface
+(`lib/classifier/types.ts`) — `train()`, `addSample()`, `predict()`,
+`export()`/`import()`. The current implementation is a single-frame **KNN**
+(`lib/classifier/knn.ts`); swap it for an LSTM later **without** rewriting the
+trainer UI or the call pages — just satisfy the same interface. `lib/signStore.ts`
+holds the one app-wide instance + persistence.
 
 ---
 
@@ -50,13 +93,24 @@ That's it — no API keys, no backend, everything runs in the browser.
 
 ```
 app/
-  page.tsx                  Home page (pitch + CTA)
-  demo/page.tsx             3-column demo layout (shell + mock data)
+  page.tsx                  Home page (contacts + Train signs button)
+  train/page.tsx            ← Sign trainer (KNN, capture, export/import)
+  call/[id]/page.tsx        In-call sign→speech experience
   globals.css               Tailwind base
 
 components/
-  CameraSignDetector.tsx    ← CORE: webcam + MediaPipe hand tracking
+  HandTracker.tsx           ← CORE: webcam + MediaPipe Hands, emits landmarks
+  CameraSignDetector.tsx    In-call readout: pretrained + KNN over HandTracker
   GlossPanel.tsx            Animated ASL gloss cards (Framer Motion)
+
+lib/
+  landmarks.ts              Translation/scale-invariant landmark normalization
+  classifier/types.ts       SignClassifier interface (classifier-agnostic)
+  classifier/knn.ts         KNN implementation of SignClassifier
+  signStore.ts              App-wide model: localStorage + file import/export
+
+data/
+  signs.ts                  Vocabulary: pretrained + KNN labels, phrases, tones
 ```
 
 ### How CameraSignDetector works

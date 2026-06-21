@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import GlobalErrorBanner from "@/components/GlobalErrorBanner";
 
 export const metadata: Metadata = {
   title: "Phone With Hand",
@@ -18,7 +19,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <GlobalErrorBanner />
+        {children}
+      </body>
     </html>
   );
 }

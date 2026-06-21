@@ -6,12 +6,13 @@ import { use, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { speak } from "@/lib/tts";
 import { signsToSpeech } from "@/lib/ai";
-import { SIGN_BY_GESTURE } from "@/data/signs";
+import { SIGN_BY_ID } from "@/data/signs";
 
 import Link from "next/link";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Phone, PhoneOff, Mic, MicOff, Video } from "lucide-react";
 import CameraSignDetector from "@/components/CameraSignDetector";
+import CallErrorBoundary from "@/components/CallErrorBoundary";
 import GlossPanel from "@/components/GlossPanel";
 import { getContactById, type Contact } from "@/data/contacts";
 import { logCall } from "@/lib/recents";
@@ -156,7 +157,7 @@ function ContactAvatar({ contact, size }: { contact: Contact; size: number }) {
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
-export default function CallPage({ params }: { params: Promise<{ id: string }> }) {
+function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
   const { id }    = use(params);
   const router    = useRouter();
   const rm        = useReducedMotion();
@@ -183,14 +184,24 @@ export default function CallPage({ params }: { params: Promise<{ id: string }> }
     if (holdRef.current?.name === g.name) return;            // already holding this gesture
     if (holdRef.current) { clearTimeout(holdRef.current.timer); holdRef.current = null; }
     if (spokenLockRef.current === g.name) return;            // don't refire until hand drops
-    const entry = SIGN_BY_GESTURE.get(g.name);
+    // g.name is a canonical sign id (KNN id or a mapped pretrained gesture).
+    const entry = SIGN_BY_ID.get(g.name);
     if (!entry) return;
     holdRef.current = {
       name: g.name,
       timer: setTimeout(async () => {
         holdRef.current = null;
         spokenLockRef.current = g.name;
-        const { phrase, tone } = await signsToSpeech([entry.gloss]);
+        // Pretrained gestures speak their exact fixed meaning; trained (KNN)
+        // signs go through the AI gloss→speech pipeline (rule-based fallback
+        // returns this same phrase/tone when the AI is unavailable).
+        let phrase = entry.phrase;
+        let tone = entry.tone;
+        if (entry.kind === "knn") {
+          const r = await signsToSpeech([entry.id]);
+          phrase = r.phrase;
+          tone = r.tone;
+        }
         setSpoken(phrase);
         setRecent((r) => [phrase, ...r].slice(0, 4));
         speak(phrase, { tone });
@@ -717,5 +728,15 @@ export default function CallPage({ params }: { params: Promise<{ id: string }> }
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+// Wrap the call screen in an error boundary so a render-time throw shows a
+// readable panel instead of a blank/white page (Safari is strict about this).
+export default function CallPage(props: { params: Promise<{ id: string }> }) {
+  return (
+    <CallErrorBoundary>
+      <CallPageInner {...props} />
+    </CallErrorBoundary>
   );
 }
