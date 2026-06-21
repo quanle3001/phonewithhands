@@ -9,6 +9,7 @@ import { signsToSpeech, comprehendSpeech, type Comprehension } from "@/lib/ai";
 import { SIGN_BY_ID } from "@/data/signs";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Phone, PhoneOff, Mic, MicOff, Video } from "lucide-react";
 import CameraSignDetector from "@/components/CameraSignDetector";
@@ -18,6 +19,19 @@ import { getContactById, type Contact } from "@/data/contacts";
 import { logCall } from "@/lib/recents";
 
 import { startRingtone, stopRingtone } from "@/lib/ringtone";
+
+// Phase 3 Stage A — lazy-load the 3D upper-body avatar (ssr:false) so the heavy
+// three.js bundle never blocks the initial call screen. Renders an idle avatar
+// (or a placeholder if /avatar.glb is absent) above the comprehension text.
+const SigningAvatar = dynamic(() => import("@/components/SigningAvatar"), {
+  ssr: false,
+  loading: () => (
+    <div
+      className="w-full rounded-[10px]"
+      style={{ aspectRatio: "4 / 3", background: "linear-gradient(180deg,#F2F4F7,#E8ECF1)", border: "1px solid rgba(60,60,67,0.10)" }}
+    />
+  ),
+});
 
 type Phase = "ringing" | "connected" | "ended";
 
@@ -1226,12 +1240,24 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
 
                     <Sep />
 
+                    {/* Phase 3 Stage A — avatar (left) + comprehension text (right),
+                        side-by-side; wraps to stacked when the panel is narrow. The
+                        text always renders as the fallback / source of truth. */}
+                    <div className="flex flex-wrap items-start gap-3">
+                      {/* LEFT — bounded idle 3D avatar (prominent; never overflows) */}
+                      <div className="flex-shrink-0" style={{ flex: "0 0 340px", maxWidth: "100%" }}>
+                        <SigningAvatar />
+                      </div>
+
+                      {/* RIGHT — meaning / tone / key info / gloss (compact, no-scroll) */}
+                      <div className="flex-1 min-w-[180px] flex flex-col gap-2.5">
+
                     {/* Meaning + tone chip */}
                     <motion.div
                       initial={{ opacity: 0, y: rm ? 0 : 6 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ ...SPRING, delay: 0.26 }}
-                      className="rounded-[14px] p-3.5 flex flex-col gap-3"
+                      className="rounded-[14px] p-3 flex flex-col gap-2"
                       style={{
                         background: "rgba(0,0,0,0.03)",
                         border:     `1px solid ${T.separator}`,
@@ -1335,6 +1361,9 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                         </div>
                       </motion.div>
                     )}
+
+                      </div>{/* end RIGHT text column */}
+                    </div>{/* end avatar + text row */}
 
                     <div className="flex-1" />
 
