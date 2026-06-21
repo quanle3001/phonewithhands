@@ -39,6 +39,9 @@ const T = {
 
 const SPRING = { type: "spring" as const, stiffness: 260, damping: 30, mass: 0.9 };
 
+// Phase 1.7 — auto-speak the buffered sentence after the user pauses this long.
+const AUTO_SPEAK_MS = 5000;
+
 // Shared vibrancy card for floating bars
 const VIBRANCY: CSSProperties = {
   background:           "rgba(255,255,255,0.82)",
@@ -174,6 +177,52 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
   const holdRef       = useRef<{ name: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   const spokenLockRef = useRef<string | null>(null);
 
+  // ── Phase 1.7: accumulate confirmed signs, auto-speak them as one sentence ──
+  const [gloss, setGloss]         = useState<{ id: string; display: string }[]>([]);
+  const [autoPending, setAutoPending] = useState(false);
+  const glossRef          = useRef<{ id: string; display: string }[]>([]);
+  const autoSpeakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSpeakingRef     = useRef(false);
+  glossRef.current = gloss; // keep ref in sync for timer / async reads
+
+  function cancelAutoSpeak() {
+    if (autoSpeakTimerRef.current) { clearTimeout(autoSpeakTimerRef.current); autoSpeakTimerRef.current = null; }
+    setAutoPending(false);
+  }
+
+  // Speak the whole buffer as one natural sentence, then clear it.
+  async function speakSentence() {
+    cancelAutoSpeak();
+    if (isSpeakingRef.current) return;       // guard against overlap
+    const buffer = glossRef.current;
+    if (buffer.length === 0) return;
+    isSpeakingRef.current = true;
+    setGloss([]);                            // clear immediately so new signs start fresh
+    try {
+      const r = await signsToSpeech(buffer.map((x) => x.id));
+      setSpoken(r.phrase);
+      setRecent((prev) => [r.phrase, ...prev].slice(0, 4));
+      speak(r.phrase, { tone: r.tone });
+    } finally {
+      isSpeakingRef.current = false;
+    }
+  }
+
+  // Debounced auto-speak: (re)start a timer each time a sign is appended; fire
+  // when the user pauses (and we're not already speaking).
+  function scheduleAutoSpeak() {
+    if (autoSpeakTimerRef.current) clearTimeout(autoSpeakTimerRef.current);
+    setAutoPending(true);
+    autoSpeakTimerRef.current = setTimeout(() => {
+      autoSpeakTimerRef.current = null;
+      setAutoPending(false);
+      if (!isSpeakingRef.current && glossRef.current.length > 0) speakSentence();
+    }, AUTO_SPEAK_MS);
+  }
+
+  // Clean up the pending auto-speak timer on unmount.
+  useEffect(() => () => { if (autoSpeakTimerRef.current) clearTimeout(autoSpeakTimerRef.current); }, []);
+
   function handleGesture(g: { name: string; score: number } | null) {
     // hand lowered / low confidence → cancel any pending hold and re-arm
     if (!g || g.score < 0.6) {
@@ -189,22 +238,16 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
     if (!entry) return;
     holdRef.current = {
       name: g.name,
-      timer: setTimeout(async () => {
+      timer: setTimeout(() => {
         holdRef.current = null;
         spokenLockRef.current = g.name;
-        // Pretrained gestures speak their exact fixed meaning; trained (KNN)
-        // signs go through the AI gloss→speech pipeline (rule-based fallback
-        // returns this same phrase/tone when the AI is unavailable).
-        let phrase = entry.phrase;
-        let tone = entry.tone;
-        if (entry.kind === "knn") {
-          const r = await signsToSpeech([entry.id]);
-          phrase = r.phrase;
-          tone = r.tone;
-        }
-        setSpoken(phrase);
-        setRecent((r) => [phrase, ...r].slice(0, 4));
-        speak(phrase, { tone });
+        // Phase 1.7 — append the confirmed sign to the sentence buffer instead of
+        // speaking it immediately, then (re)start the debounce so the whole buffer
+        // auto-speaks once the user pauses. spokenLockRef ensures one hold = one
+        // add (re-armed when the hand drops). Light feedback only — no speak() here.
+        setGloss((b) => [...b, { id: entry.id, display: entry.display }]);
+        setSpoken(`+ ${entry.display}`);
+        scheduleAutoSpeak();
       }, 1000),
     };
   }
@@ -439,14 +482,14 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
             {/* ── Three-column in-call layout ───────────────────────────── */}
             <div className="flex flex-1 min-h-0 gap-3 px-4 pb-1">
 
-              {/* LEFT — You Sign */}
+              {/* LEFT — You Sign (equal width; camera fills leftover height, no scroll) */}
               <motion.div
                 initial={{ opacity: 0, y: dist }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ ...SPRING, delay: 0.06 }}
-                className="flex-1 min-w-0 flex flex-col gap-3"
+                className="flex-1 min-w-0 min-h-0 flex flex-col gap-3"
               >
-                {/* Camera card */}
+                {/* Camera card — grows to fill the leftover vertical space */}
                 <div className="flex-1 min-h-0 flex flex-col" style={CARD}>
                   <div
                     className="flex-shrink-0 flex items-center justify-between px-4 pt-3 pb-2.5"
@@ -467,27 +510,30 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                     <div className="flex-1 min-h-0">
                       <CameraSignDetector onGesture={handleGesture} />
                     </div>
-                    {/* Spoken caption + recent utterances (Phase 1) */}
-                    <AnimatePresence>
-                      {spoken && (
-                        <motion.div
-                          key={spoken}
-                          initial={{ opacity: 0, y: rm ? 0 : 6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ ...SPRING }}
-                          className="flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-[10px]"
-                          style={{ background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.22)" }}
-                        >
-                          <span className="text-[13px]" aria-hidden>🔊</span>
-                          <span className="text-[13px] font-medium" style={{ color: T.label }}>
+                    {/* Spoken caption — fixed-height reserved box so the camera never jumps */}
+                    <div
+                      className="flex-shrink-0 h-[46px] flex items-center gap-2 px-3 rounded-[10px]"
+                      style={
+                        spoken
+                          ? { background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.22)" }
+                          : { background: "rgba(0,0,0,0.03)", border: "1px solid rgba(0,0,0,0.06)" }
+                      }
+                    >
+                      {spoken ? (
+                        <>
+                          <span className="text-[13px] flex-shrink-0" aria-hidden>🔊</span>
+                          <span className="text-[13px] font-medium truncate min-w-0" style={{ color: T.label }}>
                             {spoken}
                           </span>
-                        </motion.div>
+                        </>
+                      ) : (
+                        <span className="text-[12px]" style={{ color: T.tertLabel }}>
+                          Your spoken words will appear here…
+                        </span>
                       )}
-                    </AnimatePresence>
-                    {recent.length > 0 && (
-                      <div className="flex-shrink-0 flex flex-wrap gap-1">
+                    </div>
+                    {recent.length > 1 && (
+                      <div className="flex-shrink-0 flex flex-wrap gap-1 max-h-[24px] overflow-hidden">
                         {recent.slice(1).map((r, i) => (
                           <span key={i} className="text-[11px] px-2 py-[3px] rounded-full"
                             style={{ background: "rgba(0,0,0,0.05)", color: T.secondLabel }}>
@@ -498,6 +544,88 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                     )}
                   </div>
                 </div>
+
+                {/* Sentence controls (Phase 1.7) — combine buffered signs into one utterance */}
+                <motion.div
+                  initial={{ opacity: 0, y: dist }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ ...SPRING, delay: 0.10 }}
+                  className="flex-shrink-0 p-3"
+                  style={CARD}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <SectionLabel>Sentence · auto-speaks on pause</SectionLabel>
+                    {gloss.length > 0 && (
+                      <span className="text-[11px] tabular-nums" style={{ color: T.tertLabel }}>
+                        {gloss.length} sign{gloss.length === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <motion.button
+                      whileHover={gloss.length ? { filter: "brightness(0.94)" } : undefined}
+                      whileTap={gloss.length ? { scale: 0.96 } : undefined}
+                      onClick={speakSentence}
+                      disabled={gloss.length === 0}
+                      aria-label="Speak the combined sentence"
+                      className="flex-1 px-3 py-[7px] rounded-[8px] text-[13px] font-semibold text-white
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                      style={{ background: T.blue, opacity: gloss.length ? 1 : 0.4 }}
+                    >
+                      🔊 Speak sentence
+                    </motion.button>
+                    <motion.button
+                      whileTap={gloss.length ? { scale: 0.96 } : undefined}
+                      onClick={() => setGloss((b) => b.slice(0, -1))}
+                      disabled={gloss.length === 0}
+                      aria-label="Undo last sign"
+                      className="px-3 py-[7px] rounded-[8px] text-[13px] font-medium
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                      style={{ background: "rgba(0,0,0,0.05)", color: T.label, opacity: gloss.length ? 1 : 0.4 }}
+                    >
+                      ⌫ Undo
+                    </motion.button>
+                    <motion.button
+                      whileTap={gloss.length ? { scale: 0.96 } : undefined}
+                      onClick={() => { setGloss([]); cancelAutoSpeak(); }}
+                      disabled={gloss.length === 0}
+                      aria-label="Clear the sentence buffer"
+                      className="px-3 py-[7px] rounded-[8px] text-[13px] font-medium
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                      style={{ background: "rgba(0,0,0,0.05)", color: T.label, opacity: gloss.length ? 1 : 0.4 }}
+                    >
+                      Clear
+                    </motion.button>
+                  </div>
+
+                  {/* Auto-speak countdown cue — restarts each time a sign is added */}
+                  {autoPending && gloss.length > 0 && (
+                    <div className="mt-2.5">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span
+                          className="w-[6px] h-[6px] rounded-full animate-pulse"
+                          style={{ background: T.blue }}
+                        />
+                        <span className="text-[11px]" style={{ color: T.secondLabel }}>
+                          Speaking in a moment…
+                        </span>
+                      </div>
+                      <div
+                        className="h-[3px] rounded-full overflow-hidden"
+                        style={{ background: "rgba(0,0,0,0.06)" }}
+                      >
+                        <motion.div
+                          key={gloss.length}
+                          initial={{ width: "0%" }}
+                          animate={{ width: "100%" }}
+                          transition={{ duration: AUTO_SPEAK_MS / 1000, ease: "linear" }}
+                          className="h-full"
+                          style={{ background: T.blue }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
 
                 {/* Quick phrases */}
                 <motion.div
@@ -538,7 +666,7 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                 transition={{ ...SPRING, delay: 0.10 }}
                 className="w-[148px] flex-shrink-0 flex flex-col justify-center items-center"
               >
-                <GlossPanel />
+                <GlossPanel signs={gloss.map((x) => x.display)} />
               </motion.div>
 
               {/* RIGHT — They Speak */}

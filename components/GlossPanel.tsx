@@ -1,9 +1,6 @@
 "use client";
 
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { useEffect, useState } from "react";
-
-const MOCK_GLOSS = ["BRING", "INSURANCE", "CARD", "AND", "PHOTO", "ID"];
 
 const SPRING = { type: "spring" as const, stiffness: 260, damping: 30, mass: 0.9 };
 
@@ -15,14 +12,14 @@ const T = {
   blue:      "#007AFF",
 };
 
-export default function GlossPanel() {
-  const [visible, setVisible] = useState(false);
-  const rm = useReducedMotion();
+interface GlossPanelProps {
+  /** Display strings for the signs currently buffered into the sentence. */
+  signs: string[];
+}
 
-  useEffect(() => {
-    const t = setTimeout(() => setVisible(true), 480);
-    return () => clearTimeout(t);
-  }, []);
+// Controlled ASL-gloss panel: renders the live sentence buffer as animated chips.
+export default function GlossPanel({ signs }: GlossPanelProps) {
+  const rm = useReducedMotion();
 
   return (
     <div className="flex flex-col items-center gap-2 w-full select-none">
@@ -34,43 +31,39 @@ export default function GlossPanel() {
       </p>
 
       <AnimatePresence>
-        {visible &&
-          MOCK_GLOSS.map((sign, i) => (
-            <motion.div
-              key={sign + i}
-              initial={{ opacity: 0, y: rm ? 0 : 6, scale: rm ? 1 : 0.90 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.88 }}
-              transition={{ ...SPRING, delay: i * 0.08 }}
-              className="w-full flex justify-center"
+        {signs.map((sign, i) => (
+          <motion.div
+            key={sign + i}
+            layout
+            initial={{ opacity: 0, y: rm ? 0 : 6, scale: rm ? 1 : 0.90 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.88 }}
+            transition={{ ...SPRING, delay: rm ? 0 : i * 0.05 }}
+            className="w-full flex justify-center"
+          >
+            <div
+              className="inline-flex items-center justify-center
+                text-[13px] font-semibold rounded-[8px]
+                px-4 py-[7px] min-w-[88px] text-center"
+              style={{
+                background:    "#FFFFFF",
+                border:        `1px solid ${T.separator}`,
+                boxShadow:     "0 1px 4px rgba(0,0,0,0.06)",
+                color:         T.label,
+                letterSpacing: "0.04em",
+              }}
             >
-              <div
-                className="inline-flex items-center justify-center
-                  text-[13px] font-semibold rounded-[8px]
-                  px-4 py-[7px] min-w-[88px] text-center"
-                style={{
-                  background:    "#FFFFFF",
-                  border:        `1px solid ${T.separator}`,
-                  boxShadow:     "0 1px 4px rgba(0,0,0,0.06)",
-                  color:         T.label,
-                  letterSpacing: "0.04em",
-                }}
-              >
-                {sign}
-              </div>
-            </motion.div>
-          ))}
+              {sign}
+            </div>
+          </motion.div>
+        ))}
       </AnimatePresence>
 
-      <motion.p
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: MOCK_GLOSS.length * 0.08 + 0.25 }}
-        className="text-[10px] mt-0.5"
-        style={{ color: "rgba(60,60,67,0.20)" }}
-      >
-        mock data
-      </motion.p>
+      {signs.length === 0 && (
+        <p className="text-[11px] text-center px-2 leading-relaxed" style={{ color: T.tertLabel }}>
+          Sign to build a sentence…
+        </p>
+      )}
     </div>
   );
 }

@@ -318,8 +318,9 @@ export default function CameraSignDetector({ onGesture }: CameraSignDetectorProp
   return (
     <div className="flex flex-col gap-2.5 w-full h-full">
 
-      {/* ── Video + canvas overlay — grows to fill the panel ── */}
-      <div className="relative bg-black/70 rounded-[10px] overflow-hidden w-full flex-1 min-h-0">
+      {/* ── Video + canvas overlay — fills the leftover panel height ── */}
+      <div className="relative bg-black/70 rounded-[10px] overflow-hidden w-full h-full"
+        style={{ minHeight: 220 }}>
         {/* Mirror video so it feels like a mirror */}
         <video
           ref={videoRef}
@@ -411,71 +412,32 @@ export default function CameraSignDetector({ onGesture }: CameraSignDetectorProp
             LIVE
           </div>
         )}
-      </div>
-
-      {/* ── Detection readout — light surface card, pinned below the camera ── */}
-      <div
-        className="flex-shrink-0 rounded-[10px] p-3.5 space-y-2.5 transition-opacity"
-        style={{
-          background: "#FFFFFF",
-          border:     "1px solid rgba(60,60,67,0.12)",
-          boxShadow:  "0 2px 8px rgba(0,0,0,0.06)",
-          opacity:    status === "ready" ? 1 : 0.45,
-        }}
-      >
-        {/* Hands detected */}
-        <div className="flex items-center justify-between">
-          <span className="text-[13px]" style={{ color: SL }}>Hands detected</span>
-          <span className="text-[13px] font-semibold tabular-nums" style={{ color: L }}>
-            {handsDetected}{" "}
-            {handsDetected === 1 ? "✋" : handsDetected === 2 ? "🙌" : "—"}
-          </span>
-        </div>
-
-        {/* Gesture */}
-        <div className="flex items-center justify-between">
-          <span className="text-[13px]" style={{ color: SL }}>Gesture</span>
-          <span
-            className="text-[13px] font-semibold"
-            style={{ color: gesture ? GREEN : TL }}
+        {/* Stats HUD — overlaid on camera bottom so camera stays full size */}
+        {status === "ready" && (
+          <div
+            className="absolute bottom-0 left-0 right-0 px-3.5 py-2.5 flex items-center gap-3"
+            style={{ background: "linear-gradient(to top, rgba(0,0,0,0.78), rgba(0,0,0,0))" }}
           >
-            {gesture ? (SIGN_BY_ID.get(gesture.name)?.display ?? gesture.name) : "None"}
-          </span>
-        </div>
-
-        {/* Confidence — systemBlue progress bar */}
-        <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px]" style={{ color: TL }}>Confidence</span>
-            <span className="text-[11px] tabular-nums" style={{ color: TL }}>
+            <span className="text-[13px] font-semibold text-white tabular-nums whitespace-nowrap">
+              {handsDetected === 1 ? "✋" : handsDetected === 2 ? "🙌" : "—"} {handsDetected}
+            </span>
+            <span
+              className="text-[14px] font-semibold whitespace-nowrap"
+              style={{ color: gesture ? "#30D158" : "rgba(255,255,255,0.55)" }}
+            >
+              {gesture ? (SIGN_BY_ID.get(gesture.name)?.display ?? gesture.name) : (handsDetected === 0 ? "Show your hand 👋" : "—")}
+            </span>
+            <div className="flex-1 h-[5px] rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.22)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-200"
+                style={{ width: gesture ? `${gesture.score * 100}%` : "0%", background: "#0A84FF" }}
+              />
+            </div>
+            <span className="text-[12px] tabular-nums text-white/90 whitespace-nowrap w-[34px] text-right">
               {gesture ? `${(gesture.score * 100).toFixed(0)}%` : "—"}
             </span>
           </div>
-          <div
-            className="w-full h-[4px] rounded-full overflow-hidden"
-            style={{ background: "rgba(60,60,67,0.10)" }}
-          >
-            <div
-              className="h-full rounded-full transition-all duration-200"
-              style={{
-                width:      gesture ? `${gesture.score * 100}%` : "0%",
-                background: BLUE,
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Hint — always occupies its slot (visibility toggled) so the card
-            height never shifts when a hand appears / disappears. */}
-        <p
-          className="text-[11px] text-center pt-0.5"
-          style={{
-            color: TL,
-            visibility: status === "ready" && handsDetected === 0 ? "visible" : "hidden",
-          }}
-        >
-          Show your hand to the camera 👋
-        </p>
+        )}
       </div>
     </div>
   );
