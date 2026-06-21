@@ -214,15 +214,26 @@ export default function HomePage() {
           >
             Contacts
           </h1>
-          <Link
-            href="/train"
-            className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-semibold
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
-            style={{ background: "rgba(0,122,255,0.10)", color: T.blue }}
-          >
-            <Hand size={15} />
-            Train signs
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/train"
+              className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-semibold
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+              style={{ background: "rgba(0,122,255,0.10)", color: T.blue }}
+            >
+              <Hand size={15} />
+              Train signs
+            </Link>
+            <Link
+              href="/capture"
+              className="flex items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] font-semibold
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+              style={{ background: "rgba(0,122,255,0.10)", color: T.blue }}
+            >
+              <Video size={15} />
+              Train avatar
+            </Link>
+          </div>
         </div>
 
         {/* iOS-style search field */}
