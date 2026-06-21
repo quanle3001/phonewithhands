@@ -46,3 +46,93 @@ export async function signsToSpeech(glosses: string[], context?: string): Promis
 
   return ruleBased(glosses);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 — caller speech → comprehension (the opposite direction).
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Comprehension {
+  meaning: string;   // plain restatement of what the caller said
+  tone:    string;   // e.g. "Friendly", "Urgent", "Neutral", "Reassuring"
+  keyInfo: string[]; // facts / instructions / times / items to remember
+  gloss:   string[]; // UPPERCASE ASL-style gloss tokens
+  source:  "rule" | "ai";
+}
+
+// Stopwords stripped when building a naive gloss in the offline fallback.
+const STOPWORDS = new Set([
+  "a", "an", "the", "is", "are", "am", "was", "were", "be", "been", "being",
+  "to", "of", "in", "on", "at", "for", "and", "or", "but", "so", "if", "then",
+  "i", "you", "we", "they", "he", "she", "it", "me", "us", "them", "him", "her",
+  "my", "your", "our", "their", "his", "its", "this", "that", "these", "those",
+  "do", "does", "did", "will", "would", "can", "could", "should", "may", "might",
+  "have", "has", "had", "with", "as", "by", "from", "up", "out", "about", "just",
+  "please", "okay", "ok", "um", "uh", "well", "like", "yeah",
+]);
+
+// Deterministic, offline comprehension — never throws so the demo survives.
+function ruleComprehend(transcript: string): Comprehension {
+  const text = transcript.trim();
+  const words = text.split(/\s+/);
+
+  // keyInfo: times, days/dates, numbers, and a few important nouns.
+  const found = new Set<string>();
+  const timeRe = /\b\d{1,2}(:\d{2})?\s?(a\.?m\.?|p\.?m\.?)\b/gi;
+  const dayRe = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tomorrow|tonight|noon|midnight|morning|afternoon|evening)\b/gi;
+  const numRe = /\$?\b\d+([.,]\d+)?\b/g;
+  const KEYWORDS = [
+    "insurance", "card", "id", "appointment", "prescription", "address", "phone",
+    "email", "name", "payment", "copay", "refill", "doctor", "office", "reschedule",
+    "cancel", "confirm", "fee", "deposit", "reservation", "table", "room",
+  ];
+  for (const m of text.match(timeRe) ?? []) found.add(m.trim());
+  for (const m of text.match(dayRe) ?? []) found.add(m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
+  for (const m of text.match(numRe) ?? []) found.add(m.trim());
+  for (const w of words) {
+    const lw = w.toLowerCase().replace(/[^a-z]/g, "");
+    if (KEYWORDS.includes(lw)) found.add(lw.charAt(0).toUpperCase() + lw.slice(1));
+  }
+  const keyInfo = Array.from(found).slice(0, 8);
+
+  // gloss: content words, uppercased, stopwords removed.
+  const gloss = words
+    .map((w) => w.toLowerCase().replace(/[^a-z0-9'-]/g, ""))
+    .filter((w) => w.length > 0 && !STOPWORDS.has(w))
+    .map((w) => w.toUpperCase())
+    .slice(0, 16);
+
+  return { meaning: text, tone: "Neutral", keyInfo, gloss, source: "rule" };
+}
+
+// Caller transcript → structured comprehension.
+// Tries ASI:1 (via /api/comprehend) first; falls back to rule-based on any failure.
+export async function comprehendSpeech(transcript: string): Promise<Comprehension> {
+  const text = (transcript ?? "").trim();
+  if (!text) {
+    return { meaning: "", tone: "Neutral", keyInfo: [], gloss: [], source: "rule" };
+  }
+
+  try {
+    const resp = await fetch("/api/comprehend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: text }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (!data.fallback && typeof data.meaning === "string" && data.meaning.trim()) {
+        return {
+          meaning: data.meaning.trim(),
+          tone: typeof data.tone === "string" && data.tone.trim() ? data.tone.trim() : "Neutral",
+          keyInfo: Array.isArray(data.keyInfo) ? data.keyInfo.filter((x: unknown): x is string => typeof x === "string") : [],
+          gloss: Array.isArray(data.gloss) ? data.gloss.filter((x: unknown): x is string => typeof x === "string") : [],
+          source: "ai",
+        };
+      }
+    }
+  } catch {
+    // network / route error → fall through to rule-based
+  }
+
+  return ruleComprehend(text);
+}

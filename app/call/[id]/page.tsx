@@ -5,7 +5,7 @@ import { use, useEffect, useRef, useState } from "react";
 
 import { useRouter } from "next/navigation";
 import { speak } from "@/lib/tts";
-import { signsToSpeech } from "@/lib/ai";
+import { signsToSpeech, comprehendSpeech, type Comprehension } from "@/lib/ai";
 import { SIGN_BY_ID } from "@/data/signs";
 
 import Link from "next/link";
@@ -69,6 +69,104 @@ const MOCK = {
   quickPhrases: ["Got it!", "Please repeat", "One moment", "Thank you", "No insurance"],
 };
 
+// ── Dr. Smith scripted conversation ─────────────────────────────────────────────
+// A 6-turn interactive script. In SCRIPTED mode the conversation advances when the
+// user actually performs `advanceSigns` (EXACT trained labels); the THEY SPEAK
+// panel renders each turn's comprehension (meaning/tone/keyInfo/gloss). The same
+// array also drives the operator teleprompter cue card in BOTH modes.
+interface ScenarioTurn {
+  caller:       string;   // line the operator reads into the phone
+  advanceSigns: string[]; // EXACT trained labels the user must perform to advance
+  userSigns:    string[]; // display strings for the cue chips
+  meaning:      string;   // THEY SPEAK: plain restatement
+  tone:         string;   // THEY SPEAK: tone word (→ toneChip)
+  keyInfo:      string[]; // THEY SPEAK: key-info chips
+  gloss:        string[]; // THEY SPEAK: ASL gloss chips
+}
+const SCENARIO: ScenarioTurn[] = [
+  {
+    caller: "Hello! Thanks for calling Dr. Smith's office.",
+    advanceSigns: ["HELLO"],
+    userSigns:    ["HELLO"],
+    meaning: "Hello! Thanks for calling Dr. Smith's office.",
+    tone: "Friendly",
+    keyInfo: ["Dr. Smith's office"],
+    gloss: ["HELLO", "THANK-YOU", "CALL", "OFFICE"],
+  },
+  {
+    caller: "How can I help you today?",
+    advanceSigns: ["WANT", "APPOINTMENT"],
+    userSigns:    ["WANT", "APPOINTMENT"],
+    meaning: "How can I help you today?",
+    tone: "Friendly",
+    keyInfo: [],
+    gloss: ["HOW", "HELP", "YOU", "TODAY"],
+  },
+  {
+    caller: "Sure — would Monday work for you?",
+    advanceSigns: ["YES", "MONDAY"],
+    userSigns:    ["YES", "MONDAY"],
+    meaning: "Sure — would Monday work for you?",
+    tone: "Reassuring",
+    keyInfo: ["Monday"],
+    gloss: ["MONDAY", "WORK", "YOU", "QUESTION"],
+  },
+  {
+    caller: "Great. Can I have your name?",
+    advanceSigns: ["NAME", "R", "I", "C", "O"],
+    userSigns:    ["NAME", "R", "I", "C", "O"],
+    meaning: "Great — can I have your name? (fingerspell it)",
+    tone: "Neutral",
+    keyInfo: ["Name needed"],
+    gloss: ["YOUR", "NAME", "WHAT"],
+  },
+  {
+    caller: "Perfect, you're all booked. Anything else?",
+    advanceSigns: ["NO", "THANK_YOU"],
+    userSigns:    ["NO", "THANK_YOU"],
+    meaning: "Perfect — you're all booked. Anything else?",
+    tone: "Friendly",
+    keyInfo: ["Appointment booked", "Monday"],
+    gloss: ["FINISH", "BOOK", "ELSE", "QUESTION"],
+  },
+  {
+    caller: "You're welcome. Take care — goodbye!",
+    advanceSigns: ["BYE"],
+    userSigns:    ["BYE"],
+    meaning: "You're welcome. Take care — goodbye!",
+    tone: "Friendly",
+    keyInfo: [],
+    gloss: ["WELCOME", "TAKE-CARE", "BYE"],
+  },
+];
+
+// Fuzzy keyword-overlap match between a caller transcript and the expected script
+// line (Dr. Smith LIVE "talk" gate). Normalize → drop stopwords → ratio of expected
+// content words found in the transcript. Robust to ASR noise / paraphrase.
+const FUZZY_STOPWORDS = new Set([
+  "a", "an", "the", "is", "are", "am", "was", "were", "be", "to", "of", "in",
+  "on", "at", "for", "and", "or", "but", "so", "if", "i", "you", "we", "they",
+  "he", "she", "it", "me", "us", "them", "my", "your", "our", "their", "do",
+  "does", "did", "will", "would", "can", "could", "should", "may", "have", "has",
+  "had", "with", "as", "by", "from", "this", "that", "how", "what", "ok", "okay",
+]);
+function fuzzyContentWords(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 0 && !FUZZY_STOPWORDS.has(w));
+}
+function fuzzyLineMatch(transcript: string, expected: string): number {
+  const exp = fuzzyContentWords(expected);
+  if (exp.length === 0) return 1; // nothing meaningful to match → treat as satisfied
+  const got = new Set(fuzzyContentWords(transcript));
+  let hit = 0;
+  for (const w of exp) if (got.has(w)) hit++;
+  return hit / exp.length;
+}
+const TALK_MATCH_THRESHOLD = 0.5;
+
 type ToneKey = "important instruction" | "greeting" | "question" | "confirmation" | "urgent";
 
 const TONE: Record<ToneKey, { color: string; icon: string; label: string }> = {
@@ -78,6 +176,25 @@ const TONE: Record<ToneKey, { color: string; icon: string; label: string }> = {
   confirmation:            { color: T.blue,   icon: "✅",  label: "Confirmation" },
   urgent:                  { color: T.red,    icon: "🚨",  label: "Urgent" },
 };
+
+// Phase 2 — map a free-form ASI:1 tone word to a chip (color + icon + label).
+// Reuses the same chip styling as the scripted TONE map above.
+function toneChip(tone?: string): { color: string; icon: string; label: string } {
+  const t = (tone ?? "").trim().toLowerCase();
+  const map: Record<string, { color: string; icon: string }> = {
+    friendly:   { color: T.blue,   icon: "👋" },
+    happy:      { color: T.green,  icon: "😊" },
+    reassuring: { color: T.green,  icon: "🤝" },
+    urgent:     { color: T.red,    icon: "🚨" },
+    serious:    { color: T.purple, icon: "⚠️" },
+    formal:     { color: T.purple, icon: "📋" },
+    apologetic: { color: T.orange, icon: "🙏" },
+    neutral:    { color: "#8E8E93", icon: "💬" },
+  };
+  const hit = map[t] ?? { color: "#8E8E93", icon: "💬" };
+  const label = t ? t.charAt(0).toUpperCase() + t.slice(1) : "Neutral";
+  return { color: hit.color, icon: hit.icon, label };
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -223,6 +340,217 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
   // Clean up the pending auto-speak timer on unmount.
   useEffect(() => () => { if (autoSpeakTimerRef.current) clearTimeout(autoSpeakTimerRef.current); }, []);
 
+  // ── Phase 2: caller speech → comprehension (live mic, freeplay contacts) ────
+  // Scripted contacts (mode "scenario", e.g. Dr. Smith) keep the demo dialogue;
+  // freeplay contacts (e.g. "Testing Call") use the live mic + ASI:1 pipeline.
+  // Dr. Smith ("scenario") can be toggled between SCRIPTED (default) and LIVE.
+  // forceLive flips it to the same live-mic comprehension flow as the freeplay
+  // Testing Call, so every existing liveMode-gated path lights up.
+  const scenarioMode = contact?.mode === "scenario";
+  const [forceLive, setForceLive] = useState(false);
+  const liveMode = contact?.mode === "freeplay" || forceLive;
+  const [cueIndex, setCueIndex]       = useState(0);
+  const [matched, setMatched]         = useState<string[]>([]); // signs satisfied this turn
+  const [talkGate, setTalkGate]       = useState(false);        // caller line matched (Live)
+  const [scriptComplete, setScriptComplete] = useState(false);
+  const [listening, setListening]     = useState(false);
+  const [transcript, setTranscript]   = useState("");
+  const [comp, setComp]               = useState<Comprehension | null>(null);
+  const [compLoading, setCompLoading] = useState(false);
+  const [sttSupported, setSttSupported] = useState(true);
+  const [micNotice, setMicNotice]     = useState<string | null>(null);
+
+  // Refs mirror advance state so the sign-confirm callback + async comprehension
+  // read fresh values without stale closures / render batching.
+  const cueIndexRef = useRef(0);          cueIndexRef.current = cueIndex;
+  const matchedRef  = useRef<string[]>([]); matchedRef.current = matched;
+  const talkGateRef = useRef(false);      talkGateRef.current = talkGate;
+  const scriptedActiveRef = useRef(false);
+  scriptedActiveRef.current = scenarioMode && !forceLive;
+  const liveActiveRef = useRef(false);
+  liveActiveRef.current = scenarioMode && forceLive;
+
+  // Advance to the next turn (sign-driven, dual-gate, OR manual "next ▸").
+  // Resets BOTH gates for the new turn.
+  function advanceTurn() {
+    const next = Math.min(cueIndexRef.current + 1, SCENARIO.length - 1);
+    cueIndexRef.current = next;
+    matchedRef.current = [];
+    talkGateRef.current = false;
+    setCueIndex(next);
+    setMatched([]);
+    setTalkGate(false);
+  }
+
+  // Advance, or mark complete if this is the last turn (keep chips matched).
+  function advanceOrComplete() {
+    if (cueIndexRef.current >= SCENARIO.length - 1) {
+      const turn = SCENARIO[cueIndexRef.current];
+      if (turn) { matchedRef.current = turn.advanceSigns.slice(); setMatched(turn.advanceSigns.slice()); }
+      setScriptComplete(true);
+    } else {
+      advanceTurn();
+    }
+  }
+
+  // LIVE dual-gate: advance only when BOTH the sign gate AND the talk gate are
+  // satisfied for the current turn.
+  function maybeAdvanceLive() {
+    if (!liveActiveRef.current) return;
+    const turn = SCENARIO[cueIndexRef.current];
+    if (!turn) return;
+    const signDone = turn.advanceSigns.every((s) => matchedRef.current.includes(s));
+    if (signDone && talkGateRef.current) advanceOrComplete();
+  }
+
+  // Called for every confirmed recognized sign. Active for Dr. Smith in BOTH modes:
+  // it marks expected signs satisfied (order-tolerant, per-sign green chips). In
+  // SCRIPTED it advances immediately when the turn's signs are done (one gate); in
+  // LIVE it only marks the SIGN gate and defers to the dual-gate check.
+  function onRecognizedSign(label: string) {
+    if (!scenarioMode) return;
+    const turn = SCENARIO[cueIndexRef.current];
+    if (!turn || !turn.advanceSigns.includes(label)) return;
+    if (matchedRef.current.includes(label)) return;
+    const nextMatched = [...matchedRef.current, label];
+    matchedRef.current = nextMatched;
+    setMatched(nextMatched);
+    const signDone = turn.advanceSigns.every((s) => nextMatched.includes(s));
+    if (!signDone) return;
+    if (scriptedActiveRef.current) advanceOrComplete(); // scripted = sign-only gate
+    else maybeAdvanceLive();                            // live = needs talk gate too
+  }
+
+  // LIVE talk gate: fuzzy-match a caller transcript to the current turn's script
+  // line. Marks the talk gate and attempts a dual-gate advance.
+  function onCallerLine(text: string) {
+    if (!liveActiveRef.current) return;
+    const turn = SCENARIO[cueIndexRef.current];
+    if (!turn) return;
+    if (fuzzyLineMatch(text, turn.caller) >= TALK_MATCH_THRESHOLD) {
+      talkGateRef.current = true;
+      setTalkGate(true);
+      maybeAdvanceLive();
+    }
+  }
+
+  // Switch the Dr. Smith demo between scripted/live, resetting for a clean run.
+  function setDemoMode(live: boolean) {
+    setForceLive(live);
+    setCueIndex(0);     cueIndexRef.current = 0;
+    setMatched([]);     matchedRef.current = [];
+    setTalkGate(false); talkGateRef.current = false;
+    setScriptComplete(false);
+    setTranscript("");
+    setComp(null);
+    setCompLoading(false);
+    setMicNotice(null);
+    if (!live) stopListening(); // leaving live → make sure the mic is off
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
+  const listeningRef   = useRef(false);
+  listeningRef.current = listening;
+
+  // Detect Web Speech API support once on mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) setSttSupported(false);
+  }, []);
+
+  // Run a transcript through the comprehension pipeline (shared by mic + test box).
+  async function runComprehension(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    setTranscript(t);
+    setComp(null);
+    setCompLoading(true);
+    try {
+      const c = await comprehendSpeech(t);
+      setComp(c);
+      // Dr. Smith LIVE: the caller's spoken line is GATE 2 (talk). Fuzzy-match it
+      // to the current turn; advance only when BOTH gates are satisfied. (The panel
+      // above already filled from the real speech — that's unchanged.)
+      onCallerLine(t);
+    } finally {
+      setCompLoading(false);
+    }
+  }
+
+  function startListening() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { setSttSupported(false); return; }
+    try {
+      const rec = new SR();
+      rec.lang = "en-US";
+      rec.continuous = true;
+      rec.interimResults = true;
+      let finalBuf = "";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rec.onresult = (e: any) => {
+        let interim = "";
+        let final = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) final += r[0].transcript;
+          else interim += r[0].transcript;
+        }
+        if (interim) setTranscript((finalBuf + " " + interim).trim());
+        if (final) {
+          finalBuf = (finalBuf + " " + final).trim();
+          setTranscript(finalBuf);
+          runComprehension(final.trim());
+        }
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rec.onerror = (e: any) => {
+        const err = e?.error;
+        if (err === "not-allowed" || err === "service-not-allowed") {
+          setMicNotice("Microphone access denied. Allow it in the browser, or type below to simulate the caller.");
+          setListening(false);
+        } else if (err === "no-speech" || err === "aborted") {
+          // benign — ignore
+        } else {
+          setMicNotice("Speech recognition error: " + (err ?? "unknown"));
+        }
+      };
+      rec.onend = () => {
+        // continuous recognition can still stop itself — restart if still on.
+        if (listeningRef.current) { try { rec.start(); } catch { /* already started */ } }
+      };
+      recognitionRef.current = rec;
+      setMicNotice(null);
+      setListening(true);
+      rec.start();
+    } catch (err) {
+      setMicNotice("Could not start microphone: " + String(err));
+      setListening(false);
+    }
+  }
+
+  function stopListening() {
+    setListening(false);
+    const rec = recognitionRef.current;
+    if (rec) {
+      try { rec.onend = null; rec.stop(); } catch { /* noop */ }
+      recognitionRef.current = null;
+    }
+  }
+
+  function toggleListening() {
+    if (listeningRef.current) stopListening();
+    else startListening();
+  }
+
+  // Stop recognition on unmount.
+  useEffect(() => () => {
+    const rec = recognitionRef.current;
+    if (rec) { try { rec.onend = null; rec.stop(); } catch { /* noop */ } }
+  }, []);
+
   function handleGesture(g: { name: string; score: number } | null) {
     // hand lowered / low confidence → cancel any pending hold and re-arm
     if (!g || g.score < 0.6) {
@@ -248,6 +576,9 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
         setGloss((b) => [...b, { id: entry.id, display: entry.display }]);
         setSpoken(`+ ${entry.display}`);
         scheduleAutoSpeak();
+        // Dr. Smith: watch recognized labels to drive cue advancement (SIGN gate in
+        // both modes). No-op for freeplay; never interferes with auto-speak above.
+        onRecognizedSign(entry.id);
       }, 1000),
     };
   }
@@ -300,6 +631,16 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
   const toneConf   = TONE[MOCK.tone];
   const dist       = rm ? 0 : 10;
 
+  // THEY SPEAK panel data — live comprehension (freeplay/live) or the current
+  // scripted turn (interactive Dr. Smith). The scripted turn advances as the user
+  // performs the expected signs.
+  const scriptedTurn   = (scenarioMode && !forceLive) ? SCENARIO[cueIndex] : null;
+  const displayCaption = liveMode ? transcript          : (scriptedTurn?.caller  ?? "");
+  const displayMeaning = liveMode ? (comp?.meaning ?? "") : (scriptedTurn?.meaning ?? "");
+  const displayKeyInfo = liveMode ? (comp?.keyInfo ?? []) : (scriptedTurn?.keyInfo ?? []);
+  const displayGloss   = liveMode ? (comp?.gloss ?? [])   : (scriptedTurn?.gloss   ?? []);
+  const displayTone    = liveMode ? toneChip(comp?.tone)  : toneChip(scriptedTurn?.tone);
+
   // ── Floating control bar (shared) ────────────────────────────────────────────
   const RingingControls = (
     <div className="flex-shrink-0 flex justify-center pb-10 pt-4">
@@ -331,14 +672,25 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
         className="flex items-center gap-4 px-7 py-3.5"
         style={{ ...VIBRANCY, borderRadius: 28 }}
       >
-        <CtrlBtn
-          label={muted ? "Unmute" : "Mute"}
-          bg="rgba(0,0,0,0.08)"
-          fg={T.label}
-          onClick={() => setMuted((m) => !m)}
-        >
-          {muted ? <MicOff size={18} /> : <Mic size={18} />}
-        </CtrlBtn>
+        {liveMode ? (
+          <CtrlBtn
+            label={listening ? "Stop listening" : "Listen to caller"}
+            bg={listening ? T.green : "rgba(0,0,0,0.08)"}
+            fg={listening ? "#FFF" : T.label}
+            onClick={toggleListening}
+          >
+            {listening ? <Mic size={18} /> : <MicOff size={18} />}
+          </CtrlBtn>
+        ) : (
+          <CtrlBtn
+            label={muted ? "Unmute" : "Mute"}
+            bg="rgba(0,0,0,0.08)"
+            fg={T.label}
+            onClick={() => setMuted((m) => !m)}
+          >
+            {muted ? <MicOff size={18} /> : <Mic size={18} />}
+          </CtrlBtn>
+        )}
         <CtrlBtn label="Active Call" bg={T.green} fg="#FFF" size="lg">
           <Phone size={22} />
         </CtrlBtn>
@@ -688,6 +1040,33 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                         {contact.name}
                       </p>
                     </div>
+                  <div className="flex items-center gap-2">
+                    {/* Scripted ◐ Live demo toggle — Dr. Smith (scenario) only */}
+                    {scenarioMode && (
+                      <div
+                        className="flex rounded-[8px] p-[2px] gap-[2px]"
+                        style={{ background: "rgba(116,116,128,0.12)" }}
+                        role="group"
+                        aria-label="Demo mode"
+                      >
+                        {([["Scripted", false], ["Live", true]] as const).map(([label, val]) => (
+                          <button
+                            key={label}
+                            onClick={() => setDemoMode(val)}
+                            aria-pressed={forceLive === val}
+                            className="px-2.5 py-[3px] rounded-[6px] text-[11px] font-semibold
+                              transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"
+                            style={{
+                              background: forceLive === val ? "#FFFFFF" : "transparent",
+                              color:      forceLive === val ? T.label : T.secondLabel,
+                              boxShadow:  forceLive === val ? "0 1px 4px rgba(0,0,0,0.12)" : "none",
+                            }}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {/* LIVE badge */}
                     <motion.div
                       animate={{ opacity: rm ? 1 : [1, 0.45, 1] }}
@@ -701,29 +1080,153 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                       }}
                     >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: T.red }} />
-                      LIVE
+                      {liveMode && listening ? "LISTENING" : "LIVE"}
                     </motion.div>
+                  </div>
                   </div>
 
                   {/* Scrollable body */}
                   <div className="flex-1 overflow-y-auto flex flex-col gap-3.5 p-4">
+
+                    {/* Teleprompter / conversation cue — Dr. Smith in BOTH modes.
+                        Operator reads the caller line; in Scripted mode the chips
+                        turn green as the user performs each expected sign, and the
+                        conversation auto-advances when the turn is complete. */}
+                    {scenarioMode && SCENARIO[cueIndex] && (
+                      <div
+                        className="flex-shrink-0 rounded-[12px] p-3 space-y-2"
+                        style={{ background: "rgba(0,122,255,0.05)", border: "1px dashed rgba(0,122,255,0.30)" }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: T.blue }}>
+                            {forceLive ? "Live" : "Conversation"} · {cueIndex + 1}/{SCENARIO.length}
+                            {scriptComplete && (
+                              <span style={{ color: T.green }}>&nbsp;· ✓ complete</span>
+                            )}
+                          </span>
+                          <button
+                            onClick={advanceTurn}
+                            disabled={cueIndex >= SCENARIO.length - 1}
+                            className="text-[11px] font-semibold focus:outline-none
+                              focus-visible:ring-2 focus-visible:ring-[#007AFF] rounded-[6px] px-1
+                              disabled:opacity-30"
+                            style={{ color: T.blue }}
+                            aria-label="Advance to the next turn"
+                          >
+                            next ▸
+                          </button>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: T.tertLabel }}>
+                            Caller reads aloud
+                          </p>
+                          <p className="text-[13px] font-medium" style={{ color: T.label }}>
+                            &ldquo;{SCENARIO[cueIndex].caller}&rdquo;
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: T.tertLabel }}>
+                            You sign — green = done
+                          </p>
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {SCENARIO[cueIndex].advanceSigns.map((s, i) => {
+                              const isMatched = matched.includes(s);
+                              return (
+                                <span
+                                  key={s + i}
+                                  className="inline-flex items-center gap-1 rounded-[6px] px-2 py-[2px] text-[11px] font-semibold"
+                                  style={isMatched
+                                    ? { background: "rgba(52,199,89,0.14)", border: "1px solid rgba(52,199,89,0.35)", color: T.green, letterSpacing: "0.04em" }
+                                    : { background: "rgba(0,122,255,0.10)", border: "1px solid rgba(0,122,255,0.18)", color: T.blue, letterSpacing: "0.04em" }}
+                                >
+                                  {isMatched && <span aria-hidden>✓</span>}{s}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* LIVE dual-gate checklist — both must be ✓ to advance */}
+                        {forceLive && (() => {
+                          const signDone = SCENARIO[cueIndex].advanceSigns.every((s) => matched.includes(s));
+                          const Row = (ok: boolean, icon: string, label: string) => (
+                            <div
+                              className="flex items-center gap-1.5 text-[11px] font-semibold"
+                              style={{ color: ok ? T.green : T.tertLabel }}
+                            >
+                              <span aria-hidden>{ok ? "✓" : "○"}</span>
+                              <span>{icon} {label}</span>
+                            </div>
+                          );
+                          return (
+                            <div
+                              className="flex flex-col gap-1 pt-1 mt-0.5"
+                              style={{ borderTop: `1px solid ${T.separator}` }}
+                            >
+                              {Row(talkGate, "📞", "Caller line spoken")}
+                              {Row(signDone, "🤟", "Signs performed")}
+                            </div>
+                          );
+                        })()}
+
+                        {scriptComplete && (
+                          <p className="text-[11px] font-semibold" style={{ color: T.green }}>
+                            ✓ Conversation complete
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Live-mode mic notices */}
+                    {liveMode && !sttSupported && (
+                      <div
+                        className="flex-shrink-0 rounded-[10px] px-3 py-2 text-[12px] leading-relaxed"
+                        style={{ background: "rgba(255,149,0,0.10)", border: "1px solid rgba(255,149,0,0.25)", color: T.label }}
+                      >
+                        🎤 Live speech recognition isn&apos;t supported in this browser (try Chrome). Type below to simulate the caller.
+                      </div>
+                    )}
+                    {liveMode && sttSupported && micNotice && (
+                      <div
+                        className="flex-shrink-0 rounded-[10px] px-3 py-2 text-[12px] leading-relaxed"
+                        style={{ background: "rgba(255,59,48,0.08)", border: "1px solid rgba(255,59,48,0.22)", color: T.label }}
+                      >
+                        {micNotice}
+                      </div>
+                    )}
+
+                    {/* Live Caption = transcript */}
                     <motion.div
                       initial={{ opacity: 0, y: rm ? 0 : 6 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ ...SPRING, delay: 0.18 }}
                       className="space-y-2"
                     >
-                      <SectionLabel>Live Caption</SectionLabel>
+                      <div className="flex items-center justify-between">
+                        <SectionLabel>Live Caption</SectionLabel>
+                        {liveMode && (
+                          <span
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold"
+                            style={{ color: listening ? T.green : T.tertLabel }}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: listening ? T.green : T.tertLabel }} />
+                            {listening ? "Listening" : "Mic off"}
+                          </span>
+                        )}
+                      </div>
                       <p
                         className="font-semibold leading-snug"
-                        style={{ fontSize: 22, color: T.label, letterSpacing: "-0.02em" }}
+                        style={{ fontSize: 22, color: displayCaption ? T.label : T.tertLabel, letterSpacing: "-0.02em" }}
                       >
-                        &ldquo;{MOCK.officeLine}&rdquo;
+                        {displayCaption
+                          ? `“${displayCaption}”`
+                          : (liveMode ? "Waiting for the caller to speak…" : "")}
                       </p>
                     </motion.div>
 
                     <Sep />
 
+                    {/* Meaning + tone chip */}
                     <motion.div
                       initial={{ opacity: 0, y: rm ? 0 : 6 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -735,57 +1238,124 @@ function CallPageInner({ params }: { params: Promise<{ id: string }> }) {
                       }}
                     >
                       <SectionLabel>Meaning</SectionLabel>
-                      <p
-                        className="font-semibold"
-                        style={{ fontSize: 17, color: T.label, lineHeight: "1.4" }}
-                      >
-                        {MOCK.meaning}
-                      </p>
-                      <motion.span
-                        initial={{ scale: rm ? 1 : 0.84, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ ...SPRING, delay: 0.40 }}
-                        className="self-start inline-flex items-center gap-1.5 rounded-full
-                          px-3 py-1 text-[12px] font-semibold"
-                        style={{
-                          background: `${toneConf.color}18`,
-                          border:     `1px solid ${toneConf.color}35`,
-                          color:      toneConf.color,
-                        }}
-                      >
-                        {toneConf.icon}&nbsp;{toneConf.label}
-                      </motion.span>
-                    </motion.div>
-
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ ...SPRING, delay: 0.32 }}
-                      className="space-y-2"
-                    >
-                      <SectionLabel>Key Info</SectionLabel>
-                      <div className="flex flex-wrap gap-1.5">
-                        {MOCK.keyInfo.map((item, i) => (
+                      {liveMode && compLoading ? (
+                        <p className="font-semibold" style={{ fontSize: 17, color: T.secondLabel, lineHeight: "1.4" }}>
+                          Understanding the caller&hellip;
+                        </p>
+                      ) : displayMeaning ? (
+                        <>
+                          <p
+                            className="font-semibold"
+                            style={{ fontSize: 17, color: T.label, lineHeight: "1.4" }}
+                          >
+                            {displayMeaning}
+                          </p>
                           <motion.span
-                            key={item}
-                            initial={{ opacity: 0, scale: rm ? 1 : 0.88 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            transition={{ ...SPRING, delay: 0.36 + i * 0.06 }}
-                            className="inline-flex items-center gap-1 rounded-full
-                              px-2.5 py-0.5 text-[11px]"
+                            key={displayTone.label}
+                            initial={{ scale: rm ? 1 : 0.84, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ ...SPRING, delay: rm ? 0 : 0.1 }}
+                            className="self-start inline-flex items-center gap-1.5 rounded-full
+                              px-3 py-1 text-[12px] font-semibold"
                             style={{
-                              background: "rgba(0,0,0,0.05)",
-                              border:     "1px solid rgba(0,0,0,0.08)",
-                              color:      T.secondLabel,
+                              background: `${displayTone.color}18`,
+                              border:     `1px solid ${displayTone.color}35`,
+                              color:      displayTone.color,
                             }}
                           >
-                            🔑 {item}
+                            {displayTone.icon}&nbsp;{displayTone.label}
                           </motion.span>
-                        ))}
-                      </div>
+                        </>
+                      ) : (
+                        <p style={{ fontSize: 15, color: T.tertLabel }}>
+                          {liveMode ? "The meaning will appear here once the caller speaks." : ""}
+                        </p>
+                      )}
                     </motion.div>
 
+                    {/* Key Info chips */}
+                    {displayKeyInfo.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ ...SPRING, delay: 0.32 }}
+                        className="space-y-2"
+                      >
+                        <SectionLabel>Key Info</SectionLabel>
+                        <div className="flex flex-wrap gap-1.5">
+                          {displayKeyInfo.map((item, i) => (
+                            <motion.span
+                              key={item + i}
+                              initial={{ opacity: 0, scale: rm ? 1 : 0.88 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ ...SPRING, delay: rm ? 0 : 0.06 * i }}
+                              className="inline-flex items-center gap-1 rounded-full
+                                px-2.5 py-0.5 text-[11px]"
+                              style={{
+                                background: "rgba(0,0,0,0.05)",
+                                border:     "1px solid rgba(0,0,0,0.08)",
+                                color:      T.secondLabel,
+                              }}
+                            >
+                              🔑 {item}
+                            </motion.span>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+
+                    {/* ASL Gloss text tokens (comprehension only — Phase 2) */}
+                    {displayGloss.length > 0 && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ ...SPRING, delay: 0.36 }}
+                        className="space-y-2"
+                      >
+                        <SectionLabel>ASL Gloss</SectionLabel>
+                        <div className="flex flex-wrap gap-1.5">
+                          {displayGloss.map((g, i) => (
+                            <motion.span
+                              key={g + i}
+                              initial={{ opacity: 0, scale: rm ? 1 : 0.88 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ ...SPRING, delay: rm ? 0 : 0.04 * i }}
+                              className="inline-flex items-center rounded-[8px] px-2.5 py-[3px]
+                                text-[11px] font-semibold"
+                              style={{
+                                background:    "rgba(0,122,255,0.08)",
+                                border:        "1px solid rgba(0,122,255,0.16)",
+                                color:         T.blue,
+                                letterSpacing: "0.04em",
+                              }}
+                            >
+                              {g}
+                            </motion.span>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+
                     <div className="flex-1" />
+
+                    {/* Simulate caller speech — dev/test aid (live mode only) */}
+                    {liveMode && (
+                      <input
+                        type="text"
+                        placeholder="Simulate caller speech…  (press Enter)"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            const el = e.target as HTMLInputElement;
+                            const v = el.value;
+                            if (v.trim()) { runComprehension(v); el.value = ""; }
+                          }
+                        }}
+                        aria-label="Simulate caller speech"
+                        className="flex-shrink-0 w-full text-[13px] rounded-[10px] px-3 py-2 outline-none
+                          focus:ring-2 focus:ring-[#007AFF]"
+                        style={{ background: "rgba(0,0,0,0.04)", border: `1px solid ${T.separator}`, color: T.label }}
+                      />
+                    )}
                   </div>
                 </div>
               </motion.div>
