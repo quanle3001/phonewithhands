@@ -1,3 +1,5 @@
+export type CallMode = "scenario" | "freeplay";
+
 export interface Contact {
   id: string;
   name: string;
@@ -5,6 +7,7 @@ export interface Contact {
   avatar: string;   // 2-char initials OR single emoji
   color: string;    // macOS system color hex for avatar circle
   callable: boolean;
+  mode: CallMode;   // "scenario" = scripted demo; "freeplay" = any trained sign speaks live
 }
 
 export const CONTACTS: Contact[] = [
@@ -15,6 +18,16 @@ export const CONTACTS: Contact[] = [
     avatar: "DS",
     color: "#0A84FF",
     callable: true,
+    mode: "scenario",
+  },
+  {
+    id: "testing-call",
+    name: "Testing Call",
+    subtitle: "Sign playground",
+    avatar: "🧪",
+    color: "#5E5CE6",
+    callable: true,
+    mode: "freeplay",
   },
   {
     id: "pharmacy",
@@ -23,6 +36,7 @@ export const CONTACTS: Contact[] = [
     avatar: "💊",
     color: "#30D158",
     callable: false,
+    mode: "freeplay",
   },
   {
     id: "mom",
@@ -31,6 +45,7 @@ export const CONTACTS: Contact[] = [
     avatar: "MO",
     color: "#FF9F0A",
     callable: false,
+    mode: "freeplay",
   },
   {
     id: "reservations",
@@ -39,6 +54,7 @@ export const CONTACTS: Contact[] = [
     avatar: "RE",
     color: "#BF5AF2",
     callable: false,
+    mode: "freeplay",
   },
   {
     id: "front-desk",
@@ -47,6 +63,7 @@ export const CONTACTS: Contact[] = [
     avatar: "FD",
     color: "#FF453A",
     callable: false,
+    mode: "freeplay",
   },
 ];
 

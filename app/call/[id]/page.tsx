@@ -1,8 +1,13 @@
 "use client";
 
 import type { CSSProperties, ReactNode } from "react";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
+
 import { useRouter } from "next/navigation";
+import { speak } from "@/lib/tts";
+import { signsToSpeech } from "@/lib/ai";
+import { SIGN_BY_GESTURE } from "@/data/signs";
+
 import Link from "next/link";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Phone, PhoneOff, Mic, MicOff, Video } from "lucide-react";
@@ -10,6 +15,7 @@ import CameraSignDetector from "@/components/CameraSignDetector";
 import GlossPanel from "@/components/GlossPanel";
 import { getContactById, type Contact } from "@/data/contacts";
 import { logCall } from "@/lib/recents";
+
 import { startRingtone, stopRingtone } from "@/lib/ringtone";
 
 type Phase = "ringing" | "connected" | "ended";
@@ -160,6 +166,37 @@ export default function CallPage({ params }: { params: Promise<{ id: string }> }
   const [seconds, setSeconds] = useState(0);
   const [muted, setMuted]     = useState(false);
   const [dots, setDots]       = useState(1);
+
+  // ── Phase 1: sign → emotional speech ──────────────────────────────────────
+  const [spoken, setSpoken]   = useState<string | null>(null);
+  const [recent, setRecent]   = useState<string[]>([]);
+  const holdRef       = useRef<{ name: string; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const spokenLockRef = useRef<string | null>(null);
+
+  function handleGesture(g: { name: string; score: number } | null) {
+    // hand lowered / low confidence → cancel any pending hold and re-arm
+    if (!g || g.score < 0.6) {
+      if (holdRef.current) { clearTimeout(holdRef.current.timer); holdRef.current = null; }
+      spokenLockRef.current = null;
+      return;
+    }
+    if (holdRef.current?.name === g.name) return;            // already holding this gesture
+    if (holdRef.current) { clearTimeout(holdRef.current.timer); holdRef.current = null; }
+    if (spokenLockRef.current === g.name) return;            // don't refire until hand drops
+    const entry = SIGN_BY_GESTURE.get(g.name);
+    if (!entry) return;
+    holdRef.current = {
+      name: g.name,
+      timer: setTimeout(async () => {
+        holdRef.current = null;
+        spokenLockRef.current = g.name;
+        const { phrase, tone } = await signsToSpeech([entry.gloss]);
+        setSpoken(phrase);
+        setRecent((r) => [phrase, ...r].slice(0, 4));
+        speak(phrase, { tone });
+      }, 1000),
+    };
+  }
 
   // Redirect if contact not found or not callable
   useEffect(() => {
@@ -415,8 +452,39 @@ export default function CallPage({ params }: { params: Promise<{ id: string }> }
                     </div>
                     <span className="text-lg opacity-40" aria-hidden>🖐</span>
                   </div>
-                  <div className="flex-1 min-h-0 p-3 flex flex-col">
-                    <CameraSignDetector />
+                  <div className="flex-1 min-h-0 p-3 flex flex-col gap-2">
+                    <div className="flex-1 min-h-0">
+                      <CameraSignDetector onGesture={handleGesture} />
+                    </div>
+                    {/* Spoken caption + recent utterances (Phase 1) */}
+                    <AnimatePresence>
+                      {spoken && (
+                        <motion.div
+                          key={spoken}
+                          initial={{ opacity: 0, y: rm ? 0 : 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ ...SPRING }}
+                          className="flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-[10px]"
+                          style={{ background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.22)" }}
+                        >
+                          <span className="text-[13px]" aria-hidden>🔊</span>
+                          <span className="text-[13px] font-medium" style={{ color: T.label }}>
+                            {spoken}
+                          </span>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    {recent.length > 0 && (
+                      <div className="flex-shrink-0 flex flex-wrap gap-1">
+                        {recent.slice(1).map((r, i) => (
+                          <span key={i} className="text-[11px] px-2 py-[3px] rounded-full"
+                            style={{ background: "rgba(0,0,0,0.05)", color: T.secondLabel }}>
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -435,6 +503,7 @@ export default function CallPage({ params }: { params: Promise<{ id: string }> }
                         key={phrase}
                         whileHover={{ filter: "brightness(0.94)" }}
                         whileTap={{ scale: 0.96 }}
+                        onClick={() => { setSpoken(phrase); setRecent((r) => [phrase, ...r].slice(0, 4)); speak(phrase, { tone: "friendly" }); }}
                         aria-label={`Say: ${phrase}`}
                         className="px-3 py-[5px] rounded-[8px] text-[13px] font-medium
                           focus:outline-none focus-visible:ring-2 focus-visible:ring-[#007AFF]"

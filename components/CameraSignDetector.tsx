@@ -7,9 +7,13 @@ import { useEffect, useRef, useState } from "react";
 // ---------------------------------------------------------------------------
 type Status = "idle" | "loading-camera" | "loading-model" | "ready" | "denied" | "error";
 
-interface GestureReadout {
+export interface GestureReadout {
   name: string;
   score: number;
+}
+
+interface CameraSignDetectorProps {
+  onGesture?: (g: GestureReadout | null) => void;
 }
 
 // MediaPipe WASM and model hosted on CDN — no API key, no server needed
@@ -18,7 +22,7 @@ const WASM_CDN =
 const GESTURE_MODEL =
   "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task";
 
-export default function CameraSignDetector() {
+export default function CameraSignDetector({ onGesture }: CameraSignDetectorProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -154,6 +158,12 @@ export default function CameraSignDetector() {
       stream?.getTracks().forEach((t) => t.stop());
     };
   }, []);
+
+  // Emit gesture changes to parent (hold-to-confirm lives in the call screen)
+  useEffect(() => {
+    onGesture?.(gesture);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gesture?.name, gesture?.score]);
 
   // ── Render ──────────────────────────────────────────────────────────────
 
